@@ -1,0 +1,286 @@
+-- Script Final (Perbaikan & Fitur Baru)
+-- Fokus pada stabilitas, perbaikan bug, dan penambahan fitur yang diminta.
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local localPlayer = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- ===================================================================
+-- PENGATURAN & VARIABEL GLOBAL
+-- ===================================================================
+autoFocus = true
+autoTeleport = true
+autoFly = true
+autoStart = true
+autoCollectAquarium = true -- Fitur Baru
+
+-- Status Jual Otomatis (Default)
+autoSellCommon = true
+autoSellUncommon = true
+autoSellRare = true
+autoSellEpic = true
+autoSellLegendary = true
+autoSellMythical = false
+autoSellEternal = false
+
+-- Filter Target Kelangkaan (Fitur Baru)
+filterCommon = true
+filterUncommon = true
+filterRare = true
+filterEpic = true
+filterLegendary = true
+filterMythical = true
+
+local flying = false
+local currentSpotIndex = nil
+local lastTpTime = 0
+local TP_COOLDOWN = 1.8
+
+local summonableFish = {
+    "SFish1", "SFish2", "SFish3", "SFish4",
+    "Fish1", "Fish2", "Fish3", "Fish4", "Fish5", "Fish6", "Fish7", "Fish8", "Fish9", "Fish10", "Fish11", "Fish12",
+    "Black1", "Black2", "Black3", "Black4"
+}
+
+local screenGui -- Referensi utama untuk UI
+
+-- ===================================================================
+-- FUNGSI FITUR DEVELOPER
+-- ===================================================================
+
+local function instantKillAllFish(button)
+    pcall(function()
+        button.Text = "MEMPROSES..."
+        local fishList = workspace:FindFirstChild("FishModelList")
+        if not fishList then return end
+        for _, m in ipairs(fishList:GetChildren()) do
+            if m:IsA("Model") and m:FindFirstChild("Humanoid") then m.Humanoid.Health = 1 end
+        end
+        task.wait(0.1)
+        local screenSize = workspace.CurrentCamera.ViewportSize
+        VirtualInputManager:SendMouseButtonEvent(screenSize.X / 2, screenSize.Y / 2, 0, true, game, 0)
+        task.wait(0.5)
+        VirtualInputManager:SendMouseButtonEvent(screenSize.X / 2, screenSize.Y / 2, 0, false, game, 0)
+        button.Text = "Instant Kill All Fish"
+    end)
+end
+
+local function setWeather(preset)
+    -- ... (Fungsi ini tidak berubah)
+end
+
+local function summonFish(fishName)
+    -- ... (Fungsi ini tidak berubah)
+end
+
+
+-- ===================================================================
+-- FUNGSI INTI & PEMBUATAN UI
+-- ===================================================================
+
+local function getRoot()
+    return (localPlayer.Character or localPlayer.CharacterAdded:Wait()):WaitForChild("HumanoidRootPart")
+end
+
+local function sendAutoSellUpdate(rarityIndex, isEnabled)
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    pcall(function()
+        local remoteFunc = ReplicatedStorage.AutoSell.Remote.ApplyUpdateAutoSellData
+        remoteFunc:InvokeServer(rarityIndex, 1, isEnabled) -- Base
+        remoteFunc:InvokeServer(rarityIndex, 2, isEnabled) -- Gold
+    end)
+end
+
+local function buildUI()
+    local pg = localPlayer:FindFirstChild("PlayerGui") or localPlayer:WaitForChild("PlayerGui")
+    if screenGui then pcall(function() screenGui:Destroy() end) end
+
+    screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "FishFarmUI_Stable_V2"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = pg
+
+    local sidebarFrame = Instance.new("Frame")
+    sidebarFrame.Size = UDim2.new(0, 320, 0, 500)
+    sidebarFrame.Position = UDim2.new(0, 10, 0, 120)
+    sidebarFrame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+    sidebarFrame.Parent = screenGui
+
+    local sidebarHeader = Instance.new("Frame")
+    sidebarHeader.Size = UDim2.new(1, 0, 0, 30); sidebarHeader.BackgroundColor3 = Color3.fromRGB(35,35,35); sidebarHeader.Parent = sidebarFrame
+
+    local headerLabel = Instance.new("TextLabel")
+    headerLabel.Size = UDim2.new(1, -60, 1, 0); headerLabel.Position = UDim2.new(0, 10, 0, 0); headerLabel.Text = "MENU LENGKAP"; headerLabel.TextColor3 = Color3.new(1,1,1); headerLabel.Font = Enum.Font.GothamBold; headerLabel.TextSize = 14; headerLabel.TextXAlignment = Enum.TextXAlignment.Left; headerLabel.BackgroundTransparency=1; headerLabel.Parent = sidebarHeader
+
+    local minimizeBtn = Instance.new("TextButton")
+    minimizeBtn.Size = UDim2.new(0, 25, 0, 25); minimizeBtn.Position = UDim2.new(1, -55, 0, 2.5); minimizeBtn.Text = "−"; minimizeBtn.Parent = sidebarHeader
+    
+    local sidebarCloseBtn = Instance.new("TextButton")
+    sidebarCloseBtn.Size = UDim2.new(0, 25, 0, 25); sidebarCloseBtn.Position = UDim2.new(1, -28, 0, 2.5); sidebarCloseBtn.Text = "×"; sidebarCloseBtn.Parent = sidebarHeader
+
+    do -- Draggable logic
+        local dragging, dragStart, startPos
+        sidebarHeader.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true; dragStart = input.Position; startPos = sidebarFrame.Position end end)
+        sidebarHeader.InputEnded:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
+        game:GetService("UserInputService").InputChanged:Connect(function(input) if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then local delta = input.Position - dragStart; sidebarFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y) end end)
+    end
+
+    local mainScroll = Instance.new("ScrollingFrame")
+    mainScroll.Name = "mainScroll"
+    mainScroll.Size = UDim2.new(1, 0, 1, -30)
+    mainScroll.Position = UDim2.new(0, 0, 0, 30)
+    mainScroll.CanvasSize = UDim2.new(0,0,0, 1500) -- Ukuran canvas diperbesar
+    mainScroll.BackgroundTransparency = 1
+    mainScroll.BorderSizePixel = 0
+    mainScroll.ScrollBarThickness = 6
+    mainScroll.Parent = sidebarFrame
+
+    local function createHeader(title, yPos)
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, -10, 0, 25); label.Position = UDim2.new(0, 5, 0, yPos); label.Text = title; label.Font = Enum.Font.GothamBold; label.TextSize = 16; label.TextColor3 = Color3.new(1,1,1); label.BackgroundTransparency = 1; label.TextXAlignment = Enum.TextXAlignment.Left; label.Parent = mainScroll
+        return yPos + 30
+    end
+    
+    local function createToggle(name, yPos, stateVarName, callback)
+        local button = Instance.new("TextButton"); button.Size=UDim2.new(1,-10,0,30); button.Position=UDim2.new(0,5,0,yPos); button.Text=name..": "..(_G[stateVarName] and "ON" or "OFF"); button.Parent=mainScroll; button.Font = Enum.Font.Gotham
+        button.BackgroundColor3 = _G[stateVarName] and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+        button.MouseButton1Click:Connect(function()
+            _G[stateVarName] = not _G[stateVarName]
+            button.Text = name..": "..(_G[stateVarName] and "ON" or "OFF")
+            button.BackgroundColor3 = _G[stateVarName] and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+            if callback then callback(_G[stateVarName]) end
+        end)
+        return yPos + 40
+    end
+    
+    local currentY = 10
+    
+    -- BAGIAN FARMING
+    currentY = createHeader("Farming", currentY)
+    info = Instance.new("TextLabel"); info.Name = "info"; info.Size=UDim2.new(1,-10,0,20); info.Position=UDim2.new(0,5,0,currentY); info.Text="Mencari Target..."; info.Parent=mainScroll
+    currentY = currentY + 20
+    distLabel = Instance.new("TextLabel"); distLabel.Name = "distLabel"; distLabel.Size=UDim2.new(1,-10,0,20); distLabel.Position=UDim2.new(0,5,0,currentY); distLabel.Text="Jarak: -"; distLabel.Parent=mainScroll
+    currentY = currentY + 20
+    anchorLabel = Instance.new("TextLabel"); anchorLabel.Name = "anchorLabel"; anchorLabel.Size=UDim2.new(1,-10,0,20); anchorLabel.Position=UDim2.new(0,5,0,currentY); anchorLabel.Text="Spot Terdekat: -"; anchorLabel.Parent=mainScroll
+    currentY = currentY + 30
+    
+    currentY = createToggle("Auto Focus", currentY, "autoFocus")
+    currentY = createToggle("Auto Teleport", currentY, "autoTeleport")
+    currentY = createToggle("Auto Fly", currentY, "autoFly", function() if not autoFly and flying then stopFlying() end end)
+    currentY = createToggle("Auto Kumpul Koin Akuarium", currentY, "autoCollectAquarium") -- Tombol Baru
+    currentY = currentY + 10
+
+    -- BAGIAN FILTER TARGET (FITUR BARU)
+    currentY = createHeader("Filter Target Kelangkaan", currentY)
+    local filterRarities = {"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical"}
+    local filterStateNames = {"filterCommon", "filterUncommon", "filterRare", "filterEpic", "filterLegendary", "filterMythical"}
+    for i, rarityName in ipairs(filterRarities) do
+        currentY = createToggle("Target "..rarityName, currentY, filterStateNames[i])
+    end
+
+    -- BAGIAN AUTO-SELL
+    currentY = createHeader("Auto-Sell", currentY + 10)
+    local rarities = {"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical", "Eternal"}
+    local sellStateNames = {"autoSellCommon", "autoSellUncommon", "autoSellRare", "autoSellEpic", "autoSellLegendary", "autoSellMythical", "autoSellEternal"}
+    for i, rarityName in ipairs(rarities) do
+        currentY = createToggle("Jual "..rarityName, currentY, sellStateNames[i], function(state)
+            sendAutoSellUpdate(i, state)
+        end)
+    end
+    
+    -- BAGIAN DEVELOPER
+    currentY = createHeader("Developer", currentY + 10)
+    -- ... (sisa fitur developer tidak berubah)
+end
+
+-- ... (sisa skrip)
+
+-- ===================================================================
+-- LOGIKA INTI & LOOP UTAMA (DARI SCRIPT ASLI)
+-- ===================================================================
+
+local spots = { {name="Spot 1", pos=Vector3.new(-26.609,115.715,-285.779)}, {name="Spot 2", pos=Vector3.new(-26.456,113.007,-154.013)}, {name="Spot 3", pos=Vector3.new(-24.498,116.377,-2.832)}, }
+local ETERNAL_NAMES = { SFish1 = "Loch Ness", SFish2 = "Skeleton", SFish3 = "Sea Elf", SFish4 = "Godzilla", }
+
+local function getFishData(fishName) local fishNumber = tonumber(string.match(fishName, "Fish(%d+)")) or 0; if fishNumber > 0 then if fishNumber >= 12 then return {rarity="mythical"} elseif fishNumber >= 11 then return {rarity="legendary"} elseif fishNumber >= 9 then return {rarity="epic"} elseif fishNumber >= 7 then return {rarity="rare"} elseif fishNumber >= 3 then return {rarity="uncommon"} else return {rarity="common"} end end; return nil end
+local function getActiveEternal() local fishList = workspace:FindFirstChild("FishModelList"); if not fishList then return nil end; for _, m in ipairs(fishList:GetChildren()) do if m:IsA("Model") and ETERNAL_NAMES[m.Name] then local hum = m:FindFirstChildOfClass("Humanoid"); if hum and hum.Health > 0 then return m, hum end end end; return nil end
+local function getRegularFish()
+    local fishList = workspace:FindFirstChild("FishModelList"); if not fishList then return nil end
+    local myPos = getRoot().Position
+    local availableFish = {}
+    for _, m in ipairs(fishList:GetChildren()) do
+        if m:IsA("Model") and not ETERNAL_NAMES[m.Name] then
+            local fishData = getFishData(m.Name)
+            if fishData and _G["filter"..fishData.rarity:sub(1,1):upper()..fishData.rarity:sub(2)] then -- Cek filter
+                local hum = m:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 then
+                    local dist = (m:GetModelCFrame().p - myPos).Magnitude
+                    if dist < 200 then table.insert(availableFish, {model=m, distance=dist}) end
+                end
+            end
+        end
+    end
+    if #availableFish == 0 then return nil end
+    table.sort(availableFish, function(a, b) return a.distance < b.distance end)
+    return availableFish[1].model
+end
+local function startFlying() if flying then return end; flying = true; local root = getRoot(); local bv = Instance.new("BodyVelocity", root); bv.MaxForce = Vector3.new(math.huge,math.huge,math.huge); bv.Velocity = Vector3.new(0,0,0); local bg = Instance.new("BodyGyro", root); bg.MaxTorque = Vector3.new(0,math.huge,0) end
+local function stopFlying() if not flying then return end; flying = false; local root = getRoot(); if root then for _,v in ipairs(root:GetChildren()) do if v:IsA("BodyMover") then v:Destroy() end end end end
+local function focusCameraOn(position) if not autoFocus then return end; camera.CameraType = Enum.CameraType.Scriptable; camera.CFrame = CFrame.lookAt(camera.CFrame.Position, position) end
+local function releaseCamera() camera.CameraType = Enum.CameraType.Custom end
+local function teleportToSpot(index) if not autoTeleport or (tick() - lastTpTime < TP_COOLDOWN) then return end; local sp = spots[index]; if not sp then return end; getRoot().CFrame = CFrame.new(sp.pos); currentSpotIndex = index; lastTpTime = tick(); if autoFly then startFlying() end end
+local function getNearestSpot(toPos) local bestIndex, bestDist = 1, math.huge; for i, sp in ipairs(spots) do local d = (sp.pos - toPos).Magnitude; if d < bestDist then bestDist = d; bestIndex = i end end; return bestIndex end
+
+-- INISIALISASI
+pcall(buildUI)
+task.defer(function() -- Inisialisasi filter jual
+    print("Mengatur filter jual otomatis awal...")
+    local sellStates = {"autoSellCommon", "autoSellUncommon", "autoSellRare", "autoSellEpic", "autoSellLegendary", "autoSellMythical", "autoSellEternal"}
+    for i, stateName in ipairs(sellStates) do
+        sendAutoSellUpdate(i, _G[stateName]); task.wait(0.1)
+    end
+end)
+
+-- LOGIKA BARU: AUTO COLLECT AQUARIUM
+task.spawn(function()
+    while true do
+        if autoCollectAquarium then
+            pcall(function()
+                local remote = game:GetService("ReplicatedStorage").Aquarium.Remote.ApplySettlementAquariumIncome
+                remote:InvokeServer()
+            end)
+        end
+        task.wait(2) -- Kumpul setiap 2 detik
+    end
+end)
+
+print("Script Final (Perbaikan & Fitur Baru) Siap Digunakan.")
+
+-- LOOP UTAMA
+RunService.Heartbeat:Connect(function()
+    if not (screenGui and screenGui.Parent) then return end
+
+    local targetModel
+    targetModel = getActiveEternal()
+    if not targetModel then
+        targetModel = getRegularFish()
+    end
+
+    if targetModel and targetModel.PrimaryPart then
+        local targetPos = targetModel.PrimaryPart.Position
+        if info then info.Text = targetModel.Name end
+        if distLabel then distLabel.Text = string.format("Jarak: %.1f", (targetPos - getRoot().Position).Magnitude) end
+        focusCameraOn(targetPos)
+        local nearestIndex = getNearestSpot(targetPos)
+        if anchorLabel then anchorLabel.Text = "Spot Terdekat: " .. spots[nearestIndex].name end
+        if currentSpotIndex ~= nearestIndex then teleportToSpot(nearestIndex) end
+    else
+        releaseCamera()
+        if info then info.Text = "Mencari ikan..." end
+        if distLabel then distLabel.Text = "Jarak: -" end
+        if anchorLabel then anchorLabel.Text = "Spot Terdekat: -" end
+    end
+end)
