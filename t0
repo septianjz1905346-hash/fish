@@ -1,0 +1,1481 @@
+-- Eternal Detector & Auto-Focus/Auto-Teleport
+-- Mendeteksi kemunculan SFish1..4, memberitahu, menunjukkan jarak, kamera fokus-otomatis, dan
+-- auto-teleport ke tempat terdekat yang telah Anda tentukan saat bos bergerak.
+-- Ditambahkan: Fitur Burst Shot
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local SoundService = game:GetService("SoundService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local localPlayer = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- AUTO-CLICK LAYAR MULAI SEKARANG (berjalan segera setelah skrip dimuat)
+task.spawn(function()
+    if not game:IsLoaded() then game.Loaded:Wait() end
+    task.wait(5) -- Tunggu 5 detik agar game dimuat sepenuhnya
+    
+    -- Klik tengah layar 3 kali untuk melewati layar Mulai Sekarang
+    local screenSize = workspace.CurrentCamera.ViewportSize
+    local centerX = screenSize.X / 2
+    local centerY = screenSize.Y / 2
+  
+    for i = 1, 3 do
+        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+        task.wait(0.1)
+        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
+        task.wait(0.2)
+    end
+    
+    task.wait(2) -- Tunggu 2 detik lagi sebelum melanjutkan
+end)
+
+local function getRoot()
+    local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+    return character:WaitForChild("HumanoidRootPart")
+end
+
+local function getCharacter()
+    return localPlayer.Character or localPlayer.CharacterAdded:Wait()
+end
+
+-- Tiga titik jangkar Anda
+local spots = {
+    {name="Spot 1", pos=Vector3.new(-26.609,115.715,-285.779)},
+    {name="Spot 2", pos=Vector3.new(-26.456,113.007,-154.013)},
+    {name="Spot 3", pos=Vector3.new(-24.498,116.377,-2.832)},
+}
+
+-- ID Eternal → nama tampilan
+local ETERNAL_NAMES = {
+    SFish1 = "Loch Ness",
+    SFish2 = "Skeleton",
+    SFish3 = "Sea Elf",
+    SFish4 = "Godzilla",
+}
+
+-- UI
+-- Referensi UI (dibuat ulang jika GUI dihapus oleh koneksi ulang/layar mulai)
+local screenGui, info, distLabel, anchorLabel
+-- Referensi Sidebar
+local sidebarFrame, sidebarHeader, tabContainer, farmTab, generalTab, sellTab
+local farmContent, generalContent, sellContent
+
+local function makeToggleFactory(parent)
+    return function(text, x)
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(0, 140, 0, 24)
+        b.Position = UDim2.new(0, x, 0, 1)
+        b.Text = text
+        b.Font = Enum.Font.Gotham
+        b.TextSize = 11
+        b.TextColor3 = Color3.new(1,1,1)
+        b.BackgroundColor3 = Color3.fromRGB(60,120,210)
+        b.BorderSizePixel = 0
+        b.Parent = parent
+        return b
+    end
+end
+
+-- Variabel sakelar global untuk akses yang tepat
+autoFocus = true
+autoTeleport = true
+autoStart = true
+autoFly = true
+
+-- Status jual otomatis
+local rarities = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical", "Eternal" }
+local baseState = {}
+local goldState = {}
+for i = 1, #rarities do
+    local on = i <= 6 -- default ON untuk enam pertama (termasuk Mythical), OFF hanya untuk Eternal
+    baseState[i] = on
+    goldState[i] = on
+end
+
+-- Fungsi jarak jauh jual otomatis
+local function getAutoSellRF()
+    local autoSell = ReplicatedStorage:WaitForChild("AutoSell", 5)
+    if not autoSell then return nil end
+    local remote = autoSell:WaitForChild("Remote", 5)
+    if not remote then return nil end
+    local fn = remote:WaitForChild("ApplyUpdateAutoSellData", 5)
+    if not fn or not fn:IsA("RemoteFunction") then return nil end
+    return fn
+end
+
+local function sendAutoSellUpdate(idx, grp, enabled)
+    local rf = getAutoSellRF()
+    if not rf then return false end
+    local ok, res = pcall(function()
+        return rf:InvokeServer(idx, grp, enabled)
+    end)
+    return ok
+end
+
+-- Deklarasi di muka untuk fungsi yang digunakan di buildUI
+local tryAutoStartOnce
+local autoEquipState = true
+local autoShootState = true
+local enableAutoShoot  -- Deklarasikan fungsi di muka
+
+-- **FUNGSI BARU: BURST SHOT**
+local function executeBurstShot()
+    local screenSize = workspace.CurrentCamera.ViewportSize
+    local centerX = screenSize.X / 2
+    local centerY = screenSize.Y / 2
+    
+    for i = 1, 5 do -- Tembak 5 kali
+        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+        task.wait(0.05) -- Penundaan singkat antara menekan dan melepaskan
+        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
+        task.wait(0.1) -- Penundaan antar tembakan
+    end
+end
+
+local function buildUI()
+    local pg = localPlayer:FindFirstChild("PlayerGui") or localPlayer:WaitForChild("PlayerGui")
+    if screenGui then pcall(function() screenGui:Destroy() end) end
+
+    screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "EternalDetector"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = pg
+
+    -- Buat sidebar terlebih dahulu
+    sidebarFrame = Instance.new("Frame")
+    sidebarFrame.Size = UDim2.new(0, 280, 0, 420) -- **Tingkatkan ukuran untuk tombol baru**
+    sidebarFrame.Position = UDim2.new(0, 10, 0, 120)
+    sidebarFrame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+    sidebarFrame.BorderSizePixel = 0
+    sidebarFrame.Visible = true
+    sidebarFrame.Parent = screenGui
+    
+    -- Header sidebar (dapat diseret)
+    sidebarHeader = Instance.new("Frame")
+    sidebarHeader.Size = UDim2.new(1, 0, 0, 30)
+    sidebarHeader.Position = UDim2.new(0, 0, 0, 0)
+    sidebarHeader.BackgroundColor3 = Color3.fromRGB(35,35,35)
+    sidebarHeader.BorderSizePixel = 0
+    sidebarHeader.Parent = sidebarFrame
+    
+    local headerLabel = Instance.new("TextLabel")
+    headerLabel.Size = UDim2.new(1, -60, 1, 0)
+    headerLabel.Position = UDim2.new(0, 10, 0, 0)
+    headerLabel.BackgroundTransparency = 1
+    headerLabel.Font = Enum.Font.GothamBold
+    headerLabel.TextSize = 14
+    headerLabel.Text = "MENU"
+    headerLabel.TextXAlignment = Enum.TextXAlignment.Left
+    headerLabel.TextColor3 = Color3.new(1,1,1)
+    headerLabel.Parent = sidebarHeader
+    
+    -- Tombol minimalkan
+    local minimizeBtn = Instance.new("TextButton")
+    minimizeBtn.Size = UDim2.new(0, 25, 0, 25)
+    minimizeBtn.Position = UDim2.new(1, -55, 0, 2.5)
+    minimizeBtn.Text = "−"
+    minimizeBtn.Font = Enum.Font.GothamBold
+    minimizeBtn.TextSize = 18
+    minimizeBtn.TextColor3 = Color3.new(1,1,1)
+    minimizeBtn.BackgroundColor3 = Color3.fromRGB(50,50,50)
+    minimizeBtn.BorderSizePixel = 0
+    minimizeBtn.Parent = sidebarHeader
+    
+    -- Tombol tutup untuk sidebar
+    local sidebarCloseBtn = Instance.new("TextButton")
+    sidebarCloseBtn.Size = UDim2.new(0, 25, 0, 25)
+    sidebarCloseBtn.Position = UDim2.new(1, -28, 0, 2.5)
+    sidebarCloseBtn.Text = "×"
+    sidebarCloseBtn.Font = Enum.Font.GothamBold
+    sidebarCloseBtn.TextSize = 16
+    sidebarCloseBtn.TextColor3 = Color3.new(1,1,1)
+    sidebarCloseBtn.BackgroundColor3 = Color3.fromRGB(160,50,50)
+    sidebarCloseBtn.BorderSizePixel = 0
+    sidebarCloseBtn.Parent = sidebarHeader
+    
+    -- Jadikan sidebar dapat diseret
+    do
+        local dragging, dragStart, startPos
+        sidebarHeader.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = sidebarFrame.Position
+            end
+        end)
+        sidebarHeader.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+        
+        game:GetService("UserInputService").InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                local delta = input.Position - dragStart
+                sidebarFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            end
+        end)
+    end
+    
+    -- Kontainer tab
+    tabContainer = Instance.new("Frame")
+    tabContainer.Size = UDim2.new(1, 0, 0, 35)
+    tabContainer.Position = UDim2.new(0, 0, 0, 30)
+    tabContainer.BackgroundColor3 = Color3.fromRGB(30,30,30)
+    tabContainer.BorderSizePixel = 0
+    tabContainer.Parent = sidebarFrame
+    
+    -- Buat tombol tab
+    local tabWidth = 92
+    farmTab = Instance.new("TextButton")
+    farmTab.Size = UDim2.new(0, tabWidth, 1, 0)
+    farmTab.Position = UDim2.new(0, 0, 0, 0)
+    farmTab.Text = "Farm"
+    farmTab.Font = Enum.Font.Gotham
+    farmTab.TextSize = 12
+    farmTab.TextColor3 = Color3.new(1,1,1)
+    farmTab.BackgroundColor3 = Color3.fromRGB(45,45,45)
+    farmTab.BorderSizePixel = 0
+    farmTab.Parent = tabContainer
+    
+    generalTab = Instance.new("TextButton")
+    generalTab.Size = UDim2.new(0, tabWidth, 1, 0)
+    generalTab.Position = UDim2.new(0, tabWidth + 1, 0, 0)
+    generalTab.Text = "General"
+    generalTab.Font = Enum.Font.Gotham
+    generalTab.TextSize = 12
+    generalTab.TextColor3 = Color3.fromRGB(180,180,180)
+    generalTab.BackgroundColor3 = Color3.fromRGB(30,30,30)
+    generalTab.BorderSizePixel = 0
+    generalTab.Parent = tabContainer
+    
+    sellTab = Instance.new("TextButton")
+    sellTab.Size = UDim2.new(0, tabWidth, 1, 0)
+    sellTab.Position = UDim2.new(0, (tabWidth + 1) * 2, 0, 0)
+    sellTab.Text = "Sell"
+    sellTab.Font = Enum.Font.Gotham
+    sellTab.TextSize = 12
+    sellTab.TextColor3 = Color3.fromRGB(180,180,180)
+    sellTab.BackgroundColor3 = Color3.fromRGB(30,30,30)
+    sellTab.BorderSizePixel = 0
+    sellTab.Parent = tabContainer
+    
+    -- Kontainer konten
+    local contentContainer = Instance.new("Frame")
+    contentContainer.Size = UDim2.new(1, -10, 1, -70)
+    contentContainer.Position = UDim2.new(0, 5, 0, 65)
+    contentContainer.BackgroundTransparency = 1
+    contentContainer.Parent = sidebarFrame
+    
+    -- Area konten farm
+    farmContent = Instance.new("Frame")
+    farmContent.Size = UDim2.new(1, 0, 1, 0)
+    farmContent.Position = UDim2.new(0, 0, 0, 0)
+    farmContent.BackgroundTransparency = 1
+    farmContent.Parent = contentContainer
+    farmContent.Visible = true
+    
+    -- Area konten general
+    generalContent = Instance.new("Frame")
+    generalContent.Size = UDim2.new(1, 0, 1, 0)
+    generalContent.Position = UDim2.new(0, 0, 0, 0)
+    generalContent.BackgroundTransparency = 1
+    generalContent.Parent = contentContainer
+    generalContent.Visible = false
+    
+    -- Tambahkan kontrol tab General
+    local generalTitle = Instance.new("TextLabel")
+    generalTitle.Size = UDim2.new(1, 0, 0, 20)
+    generalTitle.Position = UDim2.new(0, 0, 0, 0)
+    generalTitle.BackgroundTransparency = 1
+    generalTitle.Font = Enum.Font.GothamBold
+    generalTitle.TextSize = 12
+    generalTitle.TextXAlignment = Enum.TextXAlignment.Left
+    generalTitle.TextColor3 = Color3.fromRGB(200,200,200)
+    generalTitle.Text = "General Settings"
+    generalTitle.Parent = generalContent
+    
+    -- Tombol Equip Slot 1
+    local equipSlot1Btn = Instance.new("TextButton")
+    equipSlot1Btn.Size = UDim2.new(1, -20, 0, 30)
+    equipSlot1Btn.Position = UDim2.new(0, 10, 0, 30)
+    equipSlot1Btn.Text = "Equip Slot 1"
+    equipSlot1Btn.Font = Enum.Font.Gotham
+    equipSlot1Btn.TextSize = 12
+    equipSlot1Btn.TextColor3 = Color3.new(1,1,1)
+    equipSlot1Btn.BackgroundColor3 = Color3.fromRGB(60,120,210)
+    equipSlot1Btn.BorderSizePixel = 0
+    equipSlot1Btn.Parent = generalContent
+    
+    equipSlot1Btn.MouseButton1Click:Connect(function()
+        -- Ketuk tombol "1" untuk melengkapi slot 1
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.One, false, game)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.One, false, game)
+        equipSlot1Btn.Text = "Equipped!"
+        equipSlot1Btn.BackgroundColor3 = Color3.fromRGB(60,180,60)
+        task.wait(1)
+        equipSlot1Btn.Text = "Equip Slot 1"
+        equipSlot1Btn.BackgroundColor3 = Color3.fromRGB(60,120,210)
+    end)
+    
+    -- Tombol Aktifkan AutoShoot
+    local autoShootBtn = Instance.new("TextButton")
+    autoShootBtn.Size = UDim2.new(1, -20, 0, 30)
+    autoShootBtn.Position = UDim2.new(0, 10, 0, 70)
+    autoShootBtn.Text = "Enable AutoShoot"
+    autoShootBtn.Font = Enum.Font.Gotham
+    autoShootBtn.TextSize = 12
+    autoShootBtn.TextColor3 = Color3.new(1,1,1)
+    autoShootBtn.BackgroundColor3 = Color3.fromRGB(60,120,210)
+    autoShootBtn.BorderSizePixel = 0
+    autoShootBtn.Parent = generalContent
+    
+    -- **TOMBOL BARU: BURST SHOT**
+    local burstShotBtn = Instance.new("TextButton")
+    burstShotBtn.Size = UDim2.new(1, -20, 0, 30)
+    burstShotBtn.Position = UDim2.new(0, 10, 0, 230) -- **Sesuaikan posisi Y**
+    burstShotBtn.Text = "Burst Shot (X)"
+    burstShotBtn.Font = Enum.Font.GothamBold
+    burstShotBtn.TextSize = 12
+    burstShotBtn.TextColor3 = Color3.new(1,1,1)
+    burstShotBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 40) -- Oranye
+    burstShotBtn.BorderSizePixel = 0
+    burstShotBtn.Parent = generalContent
+
+    burstShotBtn.MouseButton1Click:Connect(function()
+        executeBurstShot()
+        burstShotBtn.Text = "Fired!"
+        task.wait(0.5)
+        burstShotBtn.Text = "Burst Shot (X)"
+    end)
+
+    -- **Tambahkan hotkey untuk Burst Shot (tombol X)**
+    game:GetService("UserInputService").InputBegan:Connect(function(input, gameProcessed)
+        if not gameProcessed and input.KeyCode == Enum.KeyCode.X then
+            executeBurstShot()
+            -- Efek visual singkat pada tombol
+            burstShotBtn.BackgroundColor3 = Color3.fromRGB(220, 120, 60)
+            burstShotBtn.Text = "Fired!"
+            task.wait(0.5)
+            burstShotBtn.Text = "Burst Shot (X)"
+            burstShotBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 40)
+        end
+    end)
+
+    -- Fungsi aktifkan AutoShoot menggunakan firesignal (terbukti berfungsi)
+    enableAutoShoot = function()
+        local PATH = {"MainGui","RightFrame","AutoShootFrame","ContentFrame","AutoShootButton"}
+        local pg = localPlayer:FindFirstChild("PlayerGui")
+        if not pg then return false end
+        
+        -- Temukan tombol melalui path
+        local node = pg
+        for _, n in ipairs(PATH) do
+            node = node and node:FindFirstChild(n)
+            if not node then break end
+        end
+        
+        -- Jika path gagal, cari semua turunan
+        if not node or not (node:IsA("TextButton") or node:IsA("ImageButton")) then
+            node = nil
+            for _, d in ipairs(pg:GetDescendants()) do
+                if (d:IsA("TextButton") or d:IsA("ImageButton")) and d.Name == "AutoShootButton" then
+                    node = d
+                    break
+                end
+            end
+        end
+        
+        if node and (node:IsA("TextButton") or node:IsA("ImageButton")) then
+            -- Periksa apakah sudah diaktifkan
+            local txt = ""
+            pcall(function() txt = tostring(node.Text or "") end)
+            txt = txt:lower()
+            if txt:find("on") or txt:find("enable") then
+                return true -- Sudah diaktifkan
+            end
+            
+            -- Gunakan firesignal untuk mengklik tombol (Metode 2 - terbukti berfungsi)
+            local success = pcall(function()
+                if typeof(firesignal) == "function" then
+                    firesignal(node.MouseButton1Click)
+                end
+            end)
+            
+            return success
+        end
+        return false
+    end
+    
+    autoShootBtn.MouseButton1Click:Connect(function()
+        local success = enableAutoShoot()
+        if success then
+            autoShootBtn.Text = "AutoShoot Enabled!"
+            autoShootBtn.BackgroundColor3 = Color3.fromRGB(60,180,60)
+            task.wait(1.5)
+            autoShootBtn.Text = "Enable AutoShoot"
+            autoShootBtn.BackgroundColor3 = Color3.fromRGB(60,120,210)
+        else
+            autoShootBtn.Text = "Failed to find button"
+            autoShootBtn.BackgroundColor3 = Color3.fromRGB(180,60,60)
+            task.wait(1.5)
+            autoShootBtn.Text = "Enable AutoShoot"
+            autoShootBtn.BackgroundColor3 = Color3.fromRGB(60,120,210)
+        end
+    end)
+    
+    -- Sakelar Auto Equip on Start
+    local autoEquipBtn = Instance.new("TextButton")
+    autoEquipBtn.Size = UDim2.new(1, -20, 0, 30)
+    autoEquipBtn.Position = UDim2.new(0, 10, 0, 110)
+    autoEquipBtn.Text = "Auto Equip on Start: ON"
+    autoEquipBtn.Font = Enum.Font.Gotham
+    autoEquipBtn.TextSize = 12
+    autoEquipBtn.TextColor3 = Color3.new(1,1,1)
+    autoEquipBtn.BackgroundColor3 = Color3.fromRGB(60,180,60)
+    autoEquipBtn.BorderSizePixel = 0
+    autoEquipBtn.Parent = generalContent
+    
+    autoEquipBtn.MouseButton1Click:Connect(function()
+        autoEquipState = not autoEquipState
+        autoEquipBtn.Text = autoEquipState and "Auto Equip on Start: ON" or "Auto Equip on Start: OFF"
+        autoEquipBtn.BackgroundColor3 = autoEquipState and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+    end)
+    
+    -- Sakelar Auto enable AutoShoot on Start
+    local autoShootToggle = Instance.new("TextButton")
+    autoShootToggle.Size = UDim2.new(1, -20, 0, 30)
+    autoShootToggle.Position = UDim2.new(0, 10, 0, 150)
+    autoShootToggle.Text = "Auto Enable Shoot on Start: ON"
+    autoShootToggle.Font = Enum.Font.Gotham
+    autoShootToggle.TextSize = 12
+    autoShootToggle.TextColor3 = Color3.new(1,1,1)
+    autoShootToggle.BackgroundColor3 = Color3.fromRGB(60,180,60)
+    autoShootToggle.BorderSizePixel = 0
+    autoShootToggle.Parent = generalContent
+    
+    autoShootToggle.MouseButton1Click:Connect(function()
+        autoShootState = not autoShootState
+        autoShootToggle.Text = autoShootState and "Auto Enable Shoot on Start: ON" or "Auto Enable Shoot on Start: OFF"
+        autoShootToggle.BackgroundColor3 = autoShootState and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+    end)
+    
+    -- Sakelar Auto Collect Aquarium
+    local autoCollectState = true  -- Default ke ON
+    local collectConnection = nil
+    
+    local autoCollectToggle = Instance.new("TextButton")
+    autoCollectToggle.Size = UDim2.new(1, -20, 0, 30)
+    autoCollectToggle.Position = UDim2.new(0, 10, 0, 190)
+    autoCollectToggle.Text = "Auto Collect Aquarium: ON"  -- Teks default menunjukkan ON
+    autoCollectToggle.Font = Enum.Font.Gotham
+    autoCollectToggle.TextSize = 12
+    autoCollectToggle.TextColor3 = Color3.new(1,1,1)
+    autoCollectToggle.BackgroundColor3 = Color3.fromRGB(60,180,60)  -- Warna default adalah hijau
+    autoCollectToggle.BorderSizePixel = 0
+    autoCollectToggle.Parent = generalContent
+    
+    -- Mulai auto-collect segera karena ON secara default
+    collectConnection = task.spawn(function()
+        while autoCollectState do
+            local aquariumRemote = game:GetService("ReplicatedStorage"):FindFirstChild("Aquarium")
+            if aquariumRemote then
+                local remote = aquariumRemote:FindFirstChild("Remote")
+                if remote then
+                    local settleRemote = remote:FindFirstChild("ApplySettlementAquariumIncome")
+                    if settleRemote and settleRemote:IsA("RemoteFunction") then
+                        pcall(function()
+                            settleRemote:InvokeServer()
+                        end)
+                    end
+                end
+            end
+            task.wait(2) -- Kumpulkan setiap 2 detik
+        end
+    end)
+    
+    autoCollectToggle.MouseButton1Click:Connect(function()
+        autoCollectState = not autoCollectState
+        autoCollectToggle.Text = autoCollectState and "Auto Collect Aquarium: ON" or "Auto Collect Aquarium: OFF"
+        autoCollectToggle.BackgroundColor3 = autoCollectState and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+        
+        if autoCollectState then
+            -- Mulai loop auto-collect
+            collectConnection = task.spawn(function()
+                while autoCollectState do
+                    local aquariumRemote = game:GetService("ReplicatedStorage"):FindFirstChild("Aquarium")
+                    if aquariumRemote then
+                        local remote = aquariumRemote:FindFirstChild("Remote")
+                        if remote then
+                            local settleRemote = remote:FindFirstChild("ApplySettlementAquariumIncome")
+                            if settleRemote and settleRemote:IsA("RemoteFunction") then
+                                pcall(function()
+                                    settleRemote:InvokeServer()
+                                end)
+                            end
+                        end
+                    end
+                    task.wait(2) -- Kumpulkan setiap 2 detik
+                end
+            end)
+        else
+            -- Hentikan auto-collect
+            if collectConnection then
+                task.cancel(collectConnection)
+                collectConnection = nil
+            end
+        end
+    end)
+    
+    -- Sakelar Anti-AFK
+    local antiAfkState = true  -- Default ke ON
+    local antiAfkConnections = {}
+    local antiAfkPeriodicConnection = nil
+    
+    local antiAfkToggle = Instance.new("TextButton")
+    antiAfkToggle.Size = UDim2.new(1, -20, 0, 30)
+    antiAfkToggle.Position = UDim2.new(0, 10, 0, 270)
+    antiAfkToggle.Text = "Anti-AFK Protection: ON"
+    antiAfkToggle.Font = Enum.Font.Gotham
+    antiAfkToggle.TextSize = 12
+    antiAfkToggle.TextColor3 = Color3.new(1,1,1)
+    antiAfkToggle.BackgroundColor3 = Color3.fromRGB(60,180,60)
+    antiAfkToggle.BorderSizePixel = 0
+    antiAfkToggle.Parent = generalContent
+    
+    -- Fungsi Anti-AFK
+    local function enableAntiAfk()
+        -- Metode 1: Nonaktifkan koneksi Idled sepenuhnya
+        local idledConnections = getconnections(localPlayer.Idled)
+        for i, connection in ipairs(idledConnections) do
+            connection:Disable()
+        end
+        
+        -- Metode 2: Cadangan VirtualUser (jika Metode 1 gagal)
+        local VirtualUser = game:GetService("VirtualUser")
+        local idledConnection = localPlayer.Idled:Connect(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+        table.insert(antiAfkConnections, idledConnection)
+        
+        -- Metode 3: Simulasi aktivitas periodik (setiap 5 menit)
+        antiAfkPeriodicConnection = task.spawn(function()
+            while antiAfkState do
+                task.wait(300) -- Tunggu 5 menit
+                if VirtualUser and antiAfkState then
+                    VirtualUser:CaptureController()
+                    VirtualUser:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+                    task.wait(0.1)
+                    VirtualUser:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+                end
+            end
+        end)
+        
+        -- Tampilkan notifikasi
+        if game.StarterGui then
+            pcall(function()
+                game.StarterGui:SetCore("SendNotification", {
+                    Title = "🛡️ Anti-AFK Active",
+                    Text = "Multi-layer AFK protection enabled",
+                    Duration = 3
+                })
+            end)
+        end
+    end
+    
+    local function disableAntiAfk()
+        -- Putuskan semua koneksi anti-AFK
+        for _, connection in pairs(antiAfkConnections) do
+            if connection then
+                connection:Disconnect()
+            end
+        end
+        antiAfkConnections = {}
+        
+        -- Hentikan koneksi periodik
+        if antiAfkPeriodicConnection then
+            task.cancel(antiAfkPeriodicConnection)
+            antiAfkPeriodicConnection = nil
+        end
+        
+        -- Tampilkan notifikasi
+        if game.StarterGui then
+            pcall(function()
+                game.StarterGui:SetCore("SendNotification", {
+                    Title = "🛡️ Anti-AFK Disabled",
+                    Text = "AFK protection turned off",
+                    Duration = 3
+                })
+            end)
+        end
+    end
+    
+    -- Mulai anti-AFK secara default karena ON
+    enableAntiAfk()
+    
+    antiAfkToggle.MouseButton1Click:Connect(function()
+        antiAfkState = not antiAfkState
+        antiAfkToggle.Text = antiAfkState and "Anti-AFK Protection: ON" or "Anti-AFK Protection: OFF"
+        antiAfkToggle.BackgroundColor3 = antiAfkState and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+        
+        if antiAfkState then
+            enableAntiAfk()
+        else
+            disableAntiAfk()
+        end
+    end)
+    
+    -- Catatan: Tindakan otomatis akan dieksekusi setelah GUI dibuat
+    
+    -- Area konten jual
+    sellContent = Instance.new("Frame")
+    sellContent.Size = UDim2.new(1, 0, 1, 0)
+    sellContent.Position = UDim2.new(0, 0, 0, 0)
+    sellContent.BackgroundTransparency = 1
+    sellContent.Parent = contentContainer
+    sellContent.Visible = false
+    
+    -- Tambahkan kontrol AutoSell ke tab Jual
+    local sellTitle = Instance.new("TextLabel")
+    sellTitle.Size = UDim2.new(1, 0, 0, 20)
+    sellTitle.Position = UDim2.new(0, 0, 0, 0)
+    sellTitle.BackgroundTransparency = 1
+    sellTitle.Font = Enum.Font.GothamBold
+    sellTitle.TextSize = 12
+    sellTitle.TextXAlignment = Enum.TextXAlignment.Left
+    sellTitle.TextColor3 = Color3.fromRGB(200,200,200)
+    sellTitle.Text = "AutoSell Filters"
+    sellTitle.Parent = sellContent
+    
+    -- Buat frame gulir untuk kelangkaan (dengan lebih banyak ruang dari header)
+    local scrollFrame = Instance.new("ScrollingFrame")
+    scrollFrame.Size = UDim2.new(1, 0, 1, -40)
+    scrollFrame.Position = UDim2.new(0, 0, 0, 40)
+    scrollFrame.BackgroundTransparency = 1
+    scrollFrame.BorderSizePixel = 0
+    scrollFrame.ScrollBarThickness = 4
+    scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(80,80,80)
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, #rarities * 35 + 10)
+    scrollFrame.Parent = sellContent
+    
+    -- Simpan referensi tombol untuk pembaruan
+    local baseBtns, goldBtns = {}, {}
+    
+    local function updateSellBtnVisual(btn, isOn)
+        btn.Text = isOn and "ON" or "OFF"
+        btn.BackgroundColor3 = isOn and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+    end
+    
+    -- Buat baris kelangkaan
+    for i, rarityName in ipairs(rarities) do
+        local rowY = (i-1) * 35 + 5
+        
+        -- Label kelangkaan
+        local rarityLabel = Instance.new("TextLabel")
+        rarityLabel.Size = UDim2.new(0, 100, 0, 25)
+        rarityLabel.Position = UDim2.new(0, 10, 0, rowY)
+        rarityLabel.BackgroundTransparency = 1
+        rarityLabel.Font = Enum.Font.Gotham
+        rarityLabel.TextSize = 12
+        rarityLabel.TextXAlignment = Enum.TextXAlignment.Left
+        rarityLabel.TextColor3 = Color3.fromRGB(200,200,200)
+        rarityLabel.Text = rarityName
+        rarityLabel.Parent = scrollFrame
+        
+        -- Sakelar dasar
+        local baseBtn = Instance.new("TextButton")
+        baseBtn.Size = UDim2.new(0, 50, 0, 24)
+        baseBtn.Position = UDim2.new(0, 120, 0, rowY)
+        baseBtn.Font = Enum.Font.GothamBold
+        baseBtn.TextSize = 11
+        baseBtn.TextColor3 = Color3.new(1,1,1)
+        baseBtn.BorderSizePixel = 0
+        baseBtn.Parent = scrollFrame
+        updateSellBtnVisual(baseBtn, baseState[i])
+        
+        baseBtn.MouseButton1Click:Connect(function()
+            baseState[i] = not baseState[i]
+            updateSellBtnVisual(baseBtn, baseState[i])
+            sendAutoSellUpdate(i, 1, baseState[i])
+        end)
+        baseBtns[i] = baseBtn
+        
+        -- Sakelar emas
+        local goldBtn = Instance.new("TextButton")
+        goldBtn.Size = UDim2.new(0, 50, 0, 24)
+        goldBtn.Position = UDim2.new(0, 180, 0, rowY)
+        goldBtn.Font = Enum.Font.GothamBold
+        goldBtn.TextSize = 10
+        goldBtn.TextColor3 = Color3.new(1,1,1)
+        goldBtn.BorderSizePixel = 0
+        goldBtn.Parent = scrollFrame
+        updateSellBtnVisual(goldBtn, goldState[i])
+        
+        goldBtn.MouseButton1Click:Connect(function()
+            goldState[i] = not goldState[i]
+            updateSellBtnVisual(goldBtn, goldState[i])
+            sendAutoSellUpdate(i, 2, goldState[i])
+        end)
+        goldBtns[i] = goldBtn
+    end
+    
+    -- Tambahkan header kolom (dipindahkan lebih tinggi untuk membuat ruang)
+    local baseHeader = Instance.new("TextLabel")
+    baseHeader.Size = UDim2.new(0, 50, 0, 15)
+    baseHeader.Position = UDim2.new(0, 120, 0, 18)
+    baseHeader.BackgroundTransparency = 1
+    baseHeader.Font = Enum.Font.Gotham
+    baseHeader.TextSize = 11
+    baseHeader.Text = "Base"
+    baseHeader.TextColor3 = Color3.fromRGB(150,150,150)
+    baseHeader.Parent = sellContent
+    
+    local goldHeader = Instance.new("TextLabel")
+    goldHeader.Size = UDim2.new(0, 50, 0, 15)
+    goldHeader.Position = UDim2.new(0, 180, 0, 18)
+    goldHeader.BackgroundTransparency = 1
+    goldHeader.Font = Enum.Font.Gotham
+    goldHeader.TextSize = 11
+    goldHeader.Text = "Gold"
+    goldHeader.TextColor3 = Color3.fromRGB(255,215,0)
+    goldHeader.Parent = sellContent
+    
+    -- Fungsionalitas peralihan tab
+    local function switchTab(tabName)
+        -- Reset semua tab
+        farmTab.BackgroundColor3 = Color3.fromRGB(30,30,30)
+        farmTab.TextColor3 = Color3.fromRGB(180,180,180)
+        generalTab.BackgroundColor3 = Color3.fromRGB(30,30,30)
+        generalTab.TextColor3 = Color3.fromRGB(180,180,180)
+        sellTab.BackgroundColor3 = Color3.fromRGB(30,30,30)
+        sellTab.TextColor3 = Color3.fromRGB(180,180,180)
+        
+        -- Sembunyikan semua konten
+        farmContent.Visible = false
+        generalContent.Visible = false
+        sellContent.Visible = false
+        
+        -- Tampilkan tab yang dipilih
+        if tabName == "farm" then
+            farmTab.BackgroundColor3 = Color3.fromRGB(45,45,45)
+            farmTab.TextColor3 = Color3.new(1,1,1)
+            farmContent.Visible = true
+        elseif tabName == "general" then
+            generalTab.BackgroundColor3 = Color3.fromRGB(45,45,45)
+            generalTab.TextColor3 = Color3.new(1,1,1)
+            generalContent.Visible = true
+        elseif tabName == "sell" then
+            sellTab.BackgroundColor3 = Color3.fromRGB(45,45,45)
+            sellTab.TextColor3 = Color3.new(1,1,1)
+            sellContent.Visible = true
+        end
+    end
+    
+    -- Hubungkan tombol tab
+    farmTab.MouseButton1Click:Connect(function()
+        switchTab("farm")
+    end)
+    
+    generalTab.MouseButton1Click:Connect(function()
+        switchTab("general")
+    end)
+    
+    sellTab.MouseButton1Click:Connect(function()
+        switchTab("sell")
+    end)
+    
+    -- Atur tab default
+    switchTab("farm")
+    
+    -- Fungsionalitas Minimalkan/Maksimalkan
+    local isMinimized = false
+    local originalSize = sidebarFrame.Size
+    
+    minimizeBtn.MouseButton1Click:Connect(function()
+        isMinimized = not isMinimized
+        if isMinimized then
+            minimizeBtn.Text = "+"
+            sidebarFrame.Size = UDim2.new(0, 280, 0, 30)
+            tabContainer.Visible = false
+            contentContainer.Visible = false
+        else
+            minimizeBtn.Text = "−"
+            sidebarFrame.Size = originalSize
+            tabContainer.Visible = true
+            contentContainer.Visible = true
+        end
+    end)
+    
+    -- Fungsionalitas tombol tutup
+    sidebarCloseBtn.MouseButton1Click:Connect(function()
+        if sidebarFrame then
+            sidebarFrame.Visible = false
+        end
+    end)
+    
+    -- Tambahkan info detektor abadi ke tab Farm
+    info = Instance.new("TextLabel")
+    info.Size = UDim2.new(1, 0, 0, 20)
+    info.Position = UDim2.new(0, 0, 0, 0)
+    info.BackgroundTransparency = 1
+    info.Font = Enum.Font.Gotham
+    info.TextSize = 12
+    info.TextXAlignment = Enum.TextXAlignment.Left
+    info.TextColor3 = Color3.fromRGB(200,200,200)
+    info.Text = "Waiting for eternal..."
+    info.Parent = farmContent
+    
+    distLabel = Instance.new("TextLabel")
+    distLabel.Size = UDim2.new(1, 0, 0, 18)
+    distLabel.Position = UDim2.new(0, 0, 0, 22)
+    distLabel.BackgroundTransparency = 1
+    distLabel.Font = Enum.Font.Gotham
+    distLabel.TextSize = 12
+    distLabel.TextXAlignment = Enum.TextXAlignment.Left
+    distLabel.TextColor3 = Color3.fromRGB(180,220,180)
+    distLabel.Text = "Distance: -"
+    distLabel.Parent = farmContent
+    
+    anchorLabel = Instance.new("TextLabel")
+    anchorLabel.Size = UDim2.new(1, 0, 0, 18)
+    anchorLabel.Position = UDim2.new(0, 0, 0, 42)
+    anchorLabel.BackgroundTransparency = 1
+    anchorLabel.Font = Enum.Font.Gotham
+    anchorLabel.TextSize = 12
+    anchorLabel.TextXAlignment = Enum.TextXAlignment.Left
+    anchorLabel.TextColor3 = Color3.fromRGB(180,180,230)
+    anchorLabel.Text = "Nearest spot: -"
+    anchorLabel.Parent = farmContent
+    
+    -- Sakelar sidebar dengan baris yang tepat (dipindahkan ke bawah untuk mengakomodasi label info)
+    local function createSidebarToggle(name, yPos, defaultValue)
+        local toggleFrame = Instance.new("Frame")
+        toggleFrame.Size = UDim2.new(1, 0, 0, 30)
+        toggleFrame.Position = UDim2.new(0, 0, 0, yPos)
+        toggleFrame.BackgroundTransparency = 1
+        toggleFrame.Parent = farmContent
+        
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(0.7, -5, 1, 0)
+        label.Position = UDim2.new(0, 0, 0, 0)
+        label.BackgroundTransparency = 1
+        label.Font = Enum.Font.Gotham
+        label.TextSize = 12
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Text = name
+        label.TextColor3 = Color3.fromRGB(200,200,200)
+        label.Parent = toggleFrame
+        
+        local button = Instance.new("TextButton")
+        button.Size = UDim2.new(0.3, 0, 0, 24)
+        button.Position = UDim2.new(0.7, 0, 0, 3)
+        button.Text = defaultValue and "ON" or "OFF"
+        button.Font = Enum.Font.GothamBold
+        button.TextSize = 11
+        button.TextColor3 = Color3.new(1,1,1)
+        button.BackgroundColor3 = defaultValue and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+        button.BorderSizePixel = 0
+        button.Parent = toggleFrame
+        
+        return button
+    end
+    
+    local sidebarFocusBtn = createSidebarToggle("Auto Focus", 75, autoFocus)
+    local sidebarStartBtn = createSidebarToggle("Auto Start", 115, autoStart)
+    local sidebarTpBtn = createSidebarToggle("Auto Teleport", 155, autoTeleport)
+    local sidebarFlyBtn = createSidebarToggle("Auto Fly", 195, autoFly)
+    
+    -- Hubungkan handler sakelar sidebar
+    sidebarFocusBtn.MouseButton1Click:Connect(function()
+        autoFocus = not autoFocus
+        sidebarFocusBtn.Text = autoFocus and "ON" or "OFF"
+        sidebarFocusBtn.BackgroundColor3 = autoFocus and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+    end)
+    
+    sidebarStartBtn.MouseButton1Click:Connect(function()
+        autoStart = not autoStart
+        sidebarStartBtn.Text = autoStart and "ON" or "OFF"
+        sidebarStartBtn.BackgroundColor3 = autoStart and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+    end)
+    
+    sidebarTpBtn.MouseButton1Click:Connect(function()
+        autoTeleport = not autoTeleport
+        sidebarTpBtn.Text = autoTeleport and "ON" or "OFF"
+        sidebarTpBtn.BackgroundColor3 = autoTeleport and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+    end)
+    
+    sidebarFlyBtn.MouseButton1Click:Connect(function()
+        autoFly = not autoFly
+        sidebarFlyBtn.Text = autoFly and "ON" or "OFF"
+        sidebarFlyBtn.BackgroundColor3 = autoFly and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+        
+        -- Jika mematikan auto fly saat sedang terbang, berhenti terbang
+        if not autoFly and flying then
+            stopFlying()
+        end
+    end)
+
+    -- coba segera setelah dibuat (berguna tepat setelah hop)
+    task.delay(0.1, function()
+        if autoStart then
+            for _=1,30 do
+                if tryAutoStartOnce() then break end
+                task.wait(0.1)
+            end
+        end
+    end)
+    
+    -- Inisialisasi pengaturan autosell di server (6 kelangkaan pertama ON, Eternal OFF)
+    task.defer(function()
+        for grp = 1, 2 do
+            for i = 1, #rarities do
+                local desired = i <= 6
+                sendAutoSellUpdate(i, grp, desired)
+                task.wait(0.02)
+            end
+        end
+    end)
+end
+
+-- build awal
+local success, err = pcall(buildUI)
+if not success then
+    warn("Gagal membuat UI:", err)
+end
+
+-- Tambahkan sakelar keyboard untuk sidebar (tekan F9 untuk menampilkan/menyembunyikan)
+game:GetService("UserInputService").InputBegan:Connect(function(input, gameProcessed)
+    if not gameProcessed and input.KeyCode == Enum.KeyCode.F9 then
+        if sidebarFrame then
+            sidebarFrame.Visible = not sidebarFrame.Visible
+        end
+    end
+end)
+
+-- Jalankan tindakan otomatis setelah GUI dibuat
+task.spawn(function()
+    if not game:IsLoaded() then game.Loaded:Wait() end
+    
+    -- Tunggu hingga karakter ada
+    local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+    character:WaitForChild("HumanoidRootPart")
+    
+    -- Tunggu sebentar lagi untuk memastikan semuanya dimuat setelah klik Mulai Sekarang
+    task.wait(3) -- Tunggu 3 detik agar GUI dan game dimuat
+    
+    if autoEquipState then
+        -- Auto equip slot 1
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.One, false, game)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.One, false, game)
+    end
+    
+    task.wait(0.5)
+    
+    if autoShootState and enableAutoShoot then
+        -- Auto enable autoshoot
+        enableAutoShoot()
+    end
+    
+    task.wait(0.5)
+    
+    -- Teleport ke Spot 1 dan mulai terbang saat game dimulai
+    if autoFly then
+        local root = getRoot()
+        root.CFrame = CFrame.new(spots[1].pos)
+        root.AssemblyLinearVelocity = Vector3.zero
+        currentSpotIndex = 1
+        startFlying()
+    end
+    
+    task.wait(0.5)
+    
+    -- Inisialisasi pengaturan autosell (6 kelangkaan pertama ON, Eternal OFF)
+    for grp = 1, 2 do
+        for i = 1, #rarities do
+            local desired = i <= 6
+            sendAutoSellUpdate(i, grp, desired)
+            task.wait(0.02)
+        end
+    end
+end)
+
+-- Suara peringatan
+local function playAlert()
+    local s = Instance.new("Sound")
+    s.SoundId = "rbxassetid://1839997591" -- lonceng keras
+    s.Volume = 1
+    s.Parent = SoundService
+    s.Ended:Connect(function()
+        s:Destroy()
+    end)
+    s:Play()
+end
+
+-- Temukan abadi aktif (Model) dan Humanoid-nya
+local function getActiveEternal()
+    local fishList = workspace:FindFirstChild("FishModelList")
+    if not fishList then return nil end
+    for _, m in ipairs(fishList:GetChildren()) do
+        if m:IsA("Model") and ETERNAL_NAMES[m.Name] then
+            local hum = m:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                return m, hum
+            end
+        end
+    end
+    return nil
+end
+
+-- Sistem kelangkaan ikan dinamis berdasarkan nomor ikan
+-- Nomor ikan yang lebih tinggi = ikan yang lebih langka
+
+-- Ekstrak nomor ikan dari nama ikan (Fish1, Fish2, dll.)
+local function getFishNumber(fishName)
+    local number = string.match(fishName, "Fish(%d+)")
+    return number and tonumber(number) or 0
+end
+
+-- Tentukan kelangkaan berdasarkan nomor ikan (nomor lebih tinggi = lebih langka)
+local function getRarityFromNumber(fishNumber)
+    if fishNumber >= 12 then
+        return "mythical", 6
+    elseif fishNumber >= 11 then
+        return "legendary", 5
+    elseif fishNumber >= 9 then
+        return "epic", 4
+    elseif fishNumber >= 7 then
+        return "rare", 3
+    elseif fishNumber >= 3 then
+        return "uncommon", 2
+    else
+        return "common", 1
+    end
+end
+
+-- Dapatkan data ikan (kelangkaan dan prioritas) berdasarkan nama ikan
+local function getFishData(fishName)
+    local fishNumber = getFishNumber(fishName)
+    
+    -- Tangani ikan bernomor (Fish1, Fish2, dll.)
+    if fishNumber > 0 then
+        local rarity, priority = getRarityFromNumber(fishNumber)
+        return {
+            name = fishName,
+            rarity = rarity,
+            priority = priority,
+            number = fishNumber
+        }
+    end
+    
+    -- Tangani varian ikan Hitam khusus
+    local blackFish = {
+        ["Black1"] = {rarity = "legendary", priority = 5},
+        ["Black2"] = {rarity = "legendary", priority = 5},
+        ["Black3"] = {rarity = "epic", priority = 4},
+        ["Black4"] = {rarity = "rare", priority = 3},
+    }
+    
+    if blackFish[fishName] then
+        local data = blackFish[fishName]
+        return {
+            name = fishName,
+            rarity = data.rarity,
+            priority = data.priority,
+            number = 0
+        }
+    end
+    
+    -- Abaikan semua ikan lain yang tidak bernomor
+    return nil
+end
+
+-- Temukan ikan biasa saat tidak ada abadi (prioritaskan berdasarkan kelangkaan DAN jarak)
+local function getRegularFish()
+    local fishList = workspace:FindFirstChild("FishModelList")
+    if not fishList then return nil end
+    
+    local myPos = getRoot().Position
+    local availableFish = {}
+    local maxDistance = 150 -- Hanya targetkan ikan dalam jarak 150 stud
+    
+    -- Kumpulkan semua ikan yang tersedia dalam jangkauan dengan prioritas kelangkaannya
+    for _, m in ipairs(fishList:GetChildren()) do
+        if m:IsA("Model") and not ETERNAL_NAMES[m.Name] then
+            local fishData = getFishData(m.Name)
+            if fishData then
+                local hum = m:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 then
+                    local fishPos = m:GetModelCFrame().p
+                    local distance = (fishPos - myPos).Magnitude
+                    
+                    -- Hanya pertimbangkan ikan dalam jangkauan
+                    if distance <= maxDistance then
+                        table.insert(availableFish, {
+                            model = m,
+                            humanoid = hum,
+                            rarity = fishData.rarity,
+                            priority = fishData.priority,
+                            name = fishData.name,
+                            distance = distance,
+                            position = fishPos,
+                            fishNumber = fishData.number
+                        })
+                    end
+                end
+            end
+        end
+    end
+    
+    if #availableFish == 0 then return nil end
+    
+    -- Pengurutan lanjutan: Kelangkaan dulu, lalu jarak sebagai pemecah seri
+    table.sort(availableFish, function(a, b)
+        if a.priority == b.priority then
+            -- Kelangkaan sama - pilih ikan yang lebih dekat
+            return a.distance < b.distance
+        else
+            -- Kelangkaan berbeda - pilih kelangkaan yang lebih tinggi
+            return a.priority > b.priority
+        end
+    end)
+    
+    -- Pemeriksaan tambahan: Jika ikan kelangkaan tertinggi sangat jauh, pertimbangkan ikan kelangkaan lebih rendah yang lebih dekat
+    local bestFish = availableFish[1]
+    
+    -- Jika ikan terbaik adalah mitos/legendaris dan sangat jauh (>100 stud), 
+    -- periksa apakah ada ikan epik/langka yang lebih dekat dalam jarak 50 stud
+    if bestFish.distance > 100 and (bestFish.rarity == "mythical" or bestFish.rarity == "legendary") then
+        for _, fish in ipairs(availableFish) do
+            if fish.distance <= 50 and (fish.rarity == "epic" or fish.rarity == "rare") then
+                return fish.model, fish.humanoid
+            end
+        end
+    end
+    
+    return bestFish.model, bestFish.humanoid
+end
+
+-- Hitung titik jangkar terdekat dengan posisi bos
+local function getNearestSpot(toPos)
+    local bestIndex, bestDist = 1, math.huge
+    for i, sp in ipairs(spots) do
+        local d = (sp.pos - toPos).Magnitude
+        if d < bestDist then
+            bestDist = d
+            bestIndex = i
+        end
+    end
+    return bestIndex, bestDist
+end
+
+-- Manajemen kamera
+local defaultFov = camera.FieldOfView
+local focusing = false
+
+local function focusCameraOn(position)
+    if not autoFocus then return end
+    focusing = true
+    -- pertahankan posisi kamera saat ini, cukup lihat target dan perbesar sedikit
+    camera.FieldOfView = math.clamp(defaultFov - 15, 40, 100)
+    camera.CFrame = CFrame.lookAt(camera.CFrame.Position, position)
+end
+
+local function releaseCamera()
+    if focusing then
+        camera.FieldOfView = defaultFov
+        focusing = false
+    end
+end
+
+-- Pembatasan teleportasi
+local lastTpTime = 0
+local currentSpotIndex = nil
+local TP_COOLDOWN = 1.8 -- detik
+local lastBossSeenAt = 0
+
+-- Variabel sistem terbang
+local flying = false
+
+-- (Kegigihan lompatan server dihapus)
+
+-- Temukan instance server publik yang berbeda dengan slot yang tersedia
+-- (Logika lompatan server dihapus)
+
+-- Bangun kembali GUI setelah koneksi ulang/layar mulai menghapus PlayerGui
+local function ensureUI()
+    if not screenGui or not screenGui.Parent then
+        buildUI()
+    end
+end
+
+-- Coba tekan tombol Mulai/Mainkan secara otomatis di layar mulai
+local function pressGuiButton(btn)
+    local vim = game:GetService("VirtualInputManager")
+    local pos = btn.AbsolutePosition + btn.AbsoluteSize/2
+    pcall(function()
+        vim:SendMouseButtonEvent(pos.X, pos.Y, 0, true, btn, 0)
+        task.wait(0.05)
+        vim:SendMouseButtonEvent(pos.X, pos.Y, 0, false, btn, 0)
+    end)
+end
+
+local START_PATTERNS = {"start", "play", "join"}
+
+local function looksLikeStartText(s)
+    s = string.lower(s or "")
+    for _, p in ipairs(START_PATTERNS) do
+        if string.find(s, p, 1, true) then return true end
+    end
+    return false
+end
+
+tryAutoStartOnce = function()
+    if not autoStart then return end
+    local pg = localPlayer:FindFirstChild("PlayerGui")
+    if not pg then return end
+    -- pindai
+    for _, gui in ipairs(pg:GetDescendants()) do
+        if gui:IsA("TextButton") then
+            if looksLikeStartText(gui.Text) or looksLikeStartText(gui.Name) then
+                pressGuiButton(gui)
+                return true
+            end
+        elseif gui:IsA("ImageButton") then
+            if looksLikeStartText(gui.Name) then
+                pressGuiButton(gui)
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- pendengar untuk menangkap saat layar mulai muncul
+local function watchForStart()
+    local pg = localPlayer:FindFirstChild("PlayerGui")
+    if not pg then return end
+    pg.DescendantAdded:Connect(function(obj)
+        if autoStart and (obj:IsA("TextButton") or obj:IsA("ImageButton")) then
+            if looksLikeStartText(obj.Name) or (obj:IsA("TextButton") and looksLikeStartText(obj.Text)) then
+                -- beri UI waktu sejenak
+                task.delay(0.1, function()
+                    pressGuiButton(obj)
+                end)
+            end
+        end
+    end)
+end
+watchForStart()
+
+-- Sistem terbang sederhana untuk menjaga pemain di tempat teleportasi
+local function startFlying()
+    if flying then return end
+    flying = true
+    
+    local character = getCharacter()
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = getRoot()
+    
+    -- Hapus BodyMover yang ada terlebih dahulu
+    for _, obj in pairs(root:GetChildren()) do
+        if obj:IsA("BodyPosition") or obj:IsA("BodyGyro") or obj:IsA("BodyVelocity") then
+            obj:Destroy()
+        end
+    end
+    
+    -- Buat BodyVelocity untuk stabilitas yang lebih baik
+    local bodyVel = Instance.new("BodyVelocity")
+    bodyVel.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bodyVel.Velocity = Vector3.new(0, 0, 0)
+    bodyVel.Parent = root
+    
+    local bodyGyro = Instance.new("BodyGyro")
+    bodyGyro.MaxTorque = Vector3.new(0, math.huge, 0)
+    bodyGyro.CFrame = root.CFrame
+    bodyGyro.D = 500
+    bodyGyro.P = 4000
+    bodyGyro.Parent = root
+    
+    -- Atur PlatformStand untuk mencegah animasi jatuh
+    if humanoid then
+        humanoid.PlatformStand = true
+    end
+end
+
+local function stopFlying()
+    if not flying then return end
+    flying = false
+    
+    local character = getCharacter()
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = getRoot()
+    
+    -- Hapus BodyMover
+    if root then
+        for _, obj in pairs(root:GetChildren()) do
+            if obj:IsA("BodyPosition") or obj:IsA("BodyGyro") or obj:IsA("BodyVelocity") then
+                obj:Destroy()
+            end
+        end
+    end
+    
+    -- Kembalikan gerakan normal
+    if humanoid then
+        humanoid.PlatformStand = false
+    end
+end
+
+local function teleportToSpot(index)
+    if not autoTeleport then return end
+    if tick() - lastTpTime < TP_COOLDOWN then return end
+    local sp = spots[index]
+    if not sp then return end
+    local root = getRoot()
+    
+    -- Teleport ke tempat
+    root.CFrame = CFrame.new(sp.pos)
+    root.AssemblyLinearVelocity = Vector3.zero
+    currentSpotIndex = index
+    lastTpTime = tick()
+    
+    -- Aktifkan terbang jika autoFly aktif untuk mencegah jatuh
+    if autoFly then
+        startFlying()
+    end
+end
+
+-- Loop utama
+local seenThisSpawn = false -- untuk memutar peringatan sekali per kemunculan
+local lastBossModel = nil
+local currentTarget = nil -- Lacak target saat ini (abadi atau ikan biasa)
+
+RunService.Heartbeat:Connect(function()
+    ensureUI()
+    
+    -- Prioritas 1: Periksa ikan abadi terlebih dahulu
+    local bossModel = nil
+    local bossHumanoid = nil
+    bossModel, bossHumanoid = getActiveEternal()
+    
+    -- Prioritas 2: Jika tidak ada abadi, cari ikan biasa
+    local regularFish = nil
+    if not bossModel then
+        regularFish, _ = getRegularFish()
+    end
+    
+    -- Tentukan target saat ini
+    local targetModel = bossModel or regularFish
+    local targetPos = nil
+    local targetName = ""
+    local isEternal = false
+    
+    if bossModel then
+        -- Ikan abadi ditemukan (prioritas tertinggi)
+        targetPos = bossModel:GetModelCFrame().p
+        targetName = ETERNAL_NAMES[bossModel.Name] or bossModel.Name
+        isEternal = true
+        currentTarget = bossModel
+        
+        -- Peringatan sekali per kemunculan abadi
+        if bossModel ~= lastBossModel then
+            seenThisSpawn = true
+            lastBossModel = bossModel
+            playAlert()
+            lastBossSeenAt = tick()
+        end
+        
+        info.Text = string.format("👑 %s detected", targetName)
+        
+    elseif regularFish then
+        -- Ikan biasa ditemukan (saat tidak ada abadi)
+        targetPos = regularFish:GetModelCFrame().p
+        local fishData = getFishData(regularFish.Name)
+        targetName = fishData.name or regularFish.Name
+        local rarity = fishData.rarity or "unknown"
+        local distance = (targetPos - getRoot().Position).Magnitude
+        local fishNumber = fishData.number or 0
+        isEternal = false
+        currentTarget = regularFish
+        
+        -- Tampilkan kelangkaan dengan emoji dan warna yang sesuai
+        local rarityEmoji = {
+            mythical = "🌟",
+            legendary = "🔥",
+            epic = "💜", 
+            rare = "🔵",
+            uncommon = "🟢",
+            common = "⚪"
+        }
+        local emoji = rarityEmoji[rarity] or "🎣"
+        
+        -- Tampilkan nomor ikan untuk ikan bernomor
+        local displayText = fishNumber > 0 
+            and string.format("%s %s (Fish%d - %s) - %.1f studs", emoji, targetName, fishNumber, rarity:upper(), distance)
+            or string.format("%s %s (%s) - %.1f studs", emoji, targetName, rarity:upper(), distance)
+        
+        info.Text = displayText
+        
+    else
+        -- Tidak ada ikan yang ditemukan sama sekali
+        if seenThisSpawn then
+            -- Target menghilang - kembali ke basis 1
+            info.Text = "Target left. Returning to base..."
+            releaseCamera()
+            seenThisSpawn = false
+            lastBossModel = nil
+            currentTarget = nil
+            -- Kembali ke Spot 1 dan terus terbang
+            if autoFly then
+                local root = getRoot()
+                root.CFrame = CFrame.new(spots[1].pos)
+                root.AssemblyLinearVelocity = Vector3.zero
+                currentSpotIndex = 1
+                if not flying then
+                    startFlying()
+                end
+            end
+        else
+            info.Text = "Searching for targets..."
+            -- Tetap di Spot 1 sambil menunggu
+            if autoFly and not flying then
+                local root = getRoot()
+                root.CFrame = CFrame.new(spots[1].pos)
+                root.AssemblyLinearVelocity = Vector3.zero
+                currentSpotIndex = 1
+                startFlying()
+            end
+        end
+        distLabel.Text = "Distance: -"
+        anchorLabel.Text = "Nearest spot: Base 1"
+        return
+    end
+
+    -- Target ditemukan (ikan abadi atau biasa)
+    -- Jarak dari karakter saya
+    local myPos = getRoot().Position
+    local distToMe = (targetPos - myPos).Magnitude
+    distLabel.Text = string.format("Distance: %0.1f studs", distToMe)
+
+    -- Kamera fokus otomatis pada target
+    focusCameraOn(targetPos)
+
+    -- Hitung jangkar terdekat dan teleport jika diperlukan
+    local nearestIndex = select(1, getNearestSpot(targetPos))
+    anchorLabel.Text = string.format("Nearest spot: %s", spots[nearestIndex].name)
+
+    if currentSpotIndex ~= nearestIndex then
+        teleportToSpot(nearestIndex)
+    end
+    
+    -- Atur bendera terlihat untuk target apa pun
+    if not seenThisSpawn and targetModel then
+        seenThisSpawn = true
+    end
+end)
+
+print("Eternal Detector dimuat: akan memberitahu, fokus, dan auto-TP ke tempat terdekat saat bos aktif. Fitur Burst Shot ditambahkan.")
