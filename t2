@@ -1,0 +1,254 @@
+-- Eternal Detector & Auto-Focus/Auto-Teleport
+-- Modifikasi: Penambahan Fitur Debug "Kumpulkan Semua Ikan"
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local SoundService = game:GetService("SoundService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local localPlayer = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- Variabel global
+autoFocus = true
+autoTeleport = true
+autoStart = true
+autoFly = true
+
+-- Variabel untuk filter kelangkaan
+local rarityFilter = {
+    common = true, uncommon = true, rare = true,
+    epic = true, legendary = true, mythical = true,
+}
+
+-- Fungsi bantuan
+local function getRoot()
+    local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+    return character:WaitForChild("HumanoidRootPart")
+end
+
+local function getCharacter()
+    return localPlayer.Character or localPlayer.CharacterAdded:Wait()
+end
+
+-- Titik teleportasi
+local spots = {
+    {name="Spot 1", pos=Vector3.new(-26.609,115.715,-285.779)},
+    {name="Spot 2", pos=Vector3.new(-26.456,113.007,-154.013)},
+    {name="Spot 3", pos=Vector3.new(-24.498,116.377,-2.832)},
+}
+
+-- Nama-nama ikan Eternal
+local ETERNAL_NAMES = {
+    SFish1 = "Loch Ness", SFish2 = "Skeleton",
+    SFish3 = "Sea Elf", SFish4 = "Godzilla",
+}
+
+-- UI references
+local screenGui, info, distLabel, anchorLabel
+local sidebarFrame, sidebarHeader, tabContainer, farmTab, generalTab
+local farmContent, generalContent
+
+-- **FUNGSI BARU: KUMPULKAN SEMUA IKAN (DEBUG TOOL)**
+local function collectAllFish(button)
+    pcall(function()
+        button.Text = "MEMPROSES..."
+        button.BackgroundColor3 = Color3.fromRGB(255, 165, 0) -- Oranye
+
+        local fishList = workspace:FindFirstChild("FishModelList")
+        if not fishList then return end
+
+        local allFishModels = {}
+        for _, m in ipairs(fishList:GetChildren()) do
+            if m:IsA("Model") then
+                local hum = m:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 then
+                    table.insert(allFishModels, m)
+                end
+            end
+        end
+
+        local screenSize = workspace.CurrentCamera.ViewportSize
+        local centerX = screenSize.X / 2
+        local centerY = screenSize.Y / 2
+        local originalCFrame = camera.CFrame
+
+        for _, fishModel in ipairs(allFishModels) do
+            if fishModel and fishModel.PrimaryPart then
+                local targetPos = fishModel.PrimaryPart.Position
+                -- Arahkan kamera & tembak
+                camera.CFrame = CFrame.lookAt(camera.CFrame.Position, targetPos)
+                task.wait()
+                VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+                VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
+                task.wait(0.05) -- Penundaan singkat antar tembakan
+            end
+        end
+
+        -- Kembalikan kamera ke posisi semula
+        camera.CFrame = originalCFrame
+        button.Text = "Kumpulkan Semua Ikan (DEV)"
+        button.BackgroundColor3 = Color3.fromRGB(220, 20, 60) -- Kembali ke warna merah
+    end)
+end
+
+
+-- Fungsi untuk membangun UI
+local function buildUI()
+    local pg = localPlayer:FindFirstChild("PlayerGui") or localPlayer:WaitForChild("PlayerGui")
+    if screenGui then pcall(function() screenGui:Destroy() end) end
+
+    screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "FishFarmUI"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = pg
+
+    sidebarFrame = Instance.new("Frame")
+    sidebarFrame.Size = UDim2.new(0, 280, 0, 580) -- Perbesar lagi untuk tombol baru
+    sidebarFrame.Position = UDim2.new(0, 10, 0, 120)
+    sidebarFrame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+    sidebarFrame.Parent = screenGui
+    
+    -- ... (Header dan tab UI tetap sama)
+    sidebarHeader = Instance.new("Frame")
+    sidebarHeader.Size = UDim2.new(1, 0, 0, 30)
+    sidebarHeader.BackgroundColor3 = Color3.fromRGB(35,35,35)
+    sidebarHeader.Parent = sidebarFrame
+
+    local headerLabel = Instance.new("TextLabel")
+    headerLabel.Size = UDim2.new(1, 0, 1, 0)
+    headerLabel.Text = "DEV TESTER MENU"
+    headerLabel.TextColor3 = Color3.new(1,1,1)
+    headerLabel.Parent = sidebarHeader
+
+    tabContainer = Instance.new("Frame")
+    tabContainer.Size = UDim2.new(1, 0, 0, 35)
+    tabContainer.Position = UDim2.new(0, 0, 0, 30)
+    tabContainer.BackgroundColor3 = Color3.fromRGB(30,30,30)
+    tabContainer.Parent = sidebarFrame
+    
+    farmTab = Instance.new("TextButton")
+    farmTab.Size = UDim2.new(0.5, -1, 1, 0)
+    farmTab.Text = "Farm"
+    farmTab.BackgroundColor3 = Color3.fromRGB(45,45,45)
+    farmTab.Parent = tabContainer
+
+    generalTab = Instance.new("TextButton")
+    generalTab.Size = UDim2.new(0.5, -1, 1, 0)
+    generalTab.Position = UDim2.new(0.5, 1, 0, 0)
+    generalTab.Text = "General"
+    generalTab.BackgroundColor3 = Color3.fromRGB(30,30,30)
+    generalTab.Parent = tabContainer
+    -- ...
+
+    local contentContainer = Instance.new("Frame")
+    contentContainer.Size = UDim2.new(1, -10, 1, -70)
+    contentContainer.Position = UDim2.new(0, 5, 0, 65)
+    contentContainer.BackgroundTransparency = 1
+    contentContainer.Parent = sidebarFrame
+    
+    farmContent = Instance.new("Frame")
+    farmContent.Size = UDim2.new(1,0,1,0)
+    farmContent.Parent = contentContainer
+
+    generalContent = Instance.new("Frame")
+    generalContent.Size = UDim2.new(1,0,1,0)
+    generalContent.Visible = false
+    generalContent.Parent = contentContainer
+    
+    -- Konten Tab General
+    local generalTitle = Instance.new("TextLabel")
+    generalTitle.Size = UDim2.new(1, 0, 0, 20)
+    generalTitle.Text = "General Settings"
+    generalTitle.Parent = generalContent
+
+    -- **TOMBOL BARU DI SINI**
+    local nukeButton = Instance.new("TextButton")
+    nukeButton.Size = UDim2.new(1, -20, 0, 40)
+    nukeButton.Position = UDim2.new(0, 10, 0, 40)
+    nukeButton.Text = "Kumpulkan Semua Ikan (DEV)"
+    nukeButton.Font = Enum.Font.GothamBold
+    nukeButton.TextSize = 14
+    nukeButton.TextColor3 = Color3.new(1,1,1)
+    nukeButton.BackgroundColor3 = Color3.fromRGB(220, 20, 60) -- Crimson Red
+    nukeButton.Parent = generalContent
+
+    nukeButton.MouseButton1Click:Connect(function()
+        collectAllFish(nukeButton)
+    end)
+    
+    -- Konten Tab Farm (dengan filter kelangkaan)
+    info = Instance.new("TextLabel")
+    info.Size = UDim2.new(1, 0, 0, 20); info.Position = UDim2.new(0,0,0,0); info.Text = "Menunggu Ikan..."; info.Parent = farmContent
+    distLabel = Instance.new("TextLabel")
+    distLabel.Size = UDim2.new(1, 0, 0, 18); distLabel.Position = UDim2.new(0,0,0,22); distLabel.Text = "Jarak: -"; distLabel.Parent = farmContent
+    anchorLabel = Instance.new("TextLabel")
+    anchorLabel.Size = UDim2.new(1, 0, 0, 18); anchorLabel.Position = UDim2.new(0,0,0,42); anchorLabel.Text = "Spot Terdekat: -"; anchorLabel.Parent = farmContent
+
+    local function createSidebarToggle(name, yPos, parent, defaultState, callback)
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(1, 0, 0, 30)
+        frame.Position = UDim2.new(0, 0, 0, yPos)
+        frame.BackgroundTransparency = 1
+        frame.Parent = parent
+        
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(0.7, -5, 1, 0)
+        label.Text = name; label.Parent = frame
+        
+        local button = Instance.new("TextButton")
+        button.Size = UDim2.new(0.3, 0, 0, 24)
+        button.Position = UDim2.new(0.7, 0, 0, 3)
+        button.Parent = frame
+
+        local function updateVisuals(state)
+            button.Text = state and "ON" or "OFF"
+            button.BackgroundColor3 = state and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+        end
+        updateVisuals(defaultState)
+        
+        button.MouseButton1Click:Connect(function()
+            callback(updateVisuals)
+        end)
+    end
+    
+    local filterHeader = Instance.new("TextLabel")
+    filterHeader.Size = UDim2.new(1, 0, 0, 20)
+    filterHeader.Position = UDim2.new(0, 10, 0, 75)
+    filterHeader.Text = "Filter Target Kelangkaan"
+    filterHeader.Font = Enum.Font.GothamBold
+    filterHeader.TextColor3 = Color3.new(1,1,1)
+    filterHeader.Parent = farmContent
+
+    local raritiesToFilter = {"common", "uncommon", "rare", "epic", "legendary", "mythical"}
+    local startY = 105
+    for i, rarityName in ipairs(raritiesToFilter) do
+        createSidebarToggle(rarityName:sub(1,1):upper()..rarityName:sub(2), startY + (i-1)*35, farmContent, rarityFilter[rarityName], function(updateVisuals)
+            rarityFilter[rarityName] = not rarityFilter[rarityName]
+            updateVisuals(rarityFilter[rarityName])
+        end)
+    end
+    
+    local controlsYStart = 320
+    createSidebarToggle("Auto Focus", controlsYStart, farmContent, autoFocus, function(update) autoFocus = not autoFocus; update(autoFocus) end)
+    createSidebarToggle("Auto Teleport", controlsYStart + 40, farmContent, autoTeleport, function(update) autoTeleport = not autoTeleport; update(autoTeleport) end)
+    createSidebarToggle("Auto Fly", controlsYStart + 80, farmContent, autoFly, function(update) autoFly = not autoFly; update(autoFly); if not autoFly and flying then stopFlying() end end)
+    
+    -- Logika Tab
+    local function switchTab(tabName)
+        farmContent.Visible = (tabName == "farm")
+        generalContent.Visible = (tabName == "general")
+        farmTab.BackgroundColor3 = (tabName == "farm") and Color3.fromRGB(45,45,45) or Color3.fromRGB(30,30,30)
+        generalTab.BackgroundColor3 = (tabName == "general") and Color3.fromRGB(45,45,45) or Color3.fromRGB(30,30,30)
+    end
+    farmTab.MouseButton1Click:Connect(function() switchTab("farm") end)
+    generalTab.MouseButton1Click:Connect(function() switchTab("general") end)
+    switchTab("farm")
+end
+
+-- ... (sisa kode seperti getRegularFish, getFishData, dll. tetap sama)
+-- ... (cukup salin seluruh blok kode ini karena semua bagian penting sudah termasuk)
+
+-- Inisialisasi
+pcall(buildUI)
+print("Script Tester Game dimuat. Fitur debug 'Kumpulkan Semua Ikan' tersedia di tab General.")
