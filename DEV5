@@ -1,5 +1,5 @@
--- Script Tester Game Lengkap (Gabungan)
--- Versi ini telah direkonstruksi dengan logika pemuatan UI yang stabil
+-- Script Tester Game Final (Dibangun Ulang)
+-- Menggabungkan semua fitur dengan fokus pada stabilitas UI
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
@@ -7,34 +7,32 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local localPlayer = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
--- Variabel global
-autoFocus = true
-autoTeleport = true
-autoFly = true
+-- ===================================================================
+-- PENGATURAN & VARIABEL GLOBAL
+-- ===================================================================
+local autoFocus = true
+local autoTeleport = true
+local autoFly = true
 local flying = false
 local currentSpotIndex = nil
 local lastTpTime = 0
 local TP_COOLDOWN = 1.8
 
--- Variabel untuk filter kelangkaan
 local rarityFilter = {
     common = true, uncommon = true, rare = true,
     epic = true, legendary = true, mythical = true,
 }
 
--- UI references
-local screenGui, info, distLabel, anchorLabel
-local sidebarFrame, sidebarHeader, tabContainer, farmTab, generalTab
-local farmContent, generalContent
+local screenGui -- Referensi utama untuk UI
 
--- =============================================================================================
--- FUNGSI UNTUK FITUR DEVELOPER
--- =============================================================================================
+-- ===================================================================
+-- FUNGSI-FUNGSI FITUR DEVELOPER
+-- ===================================================================
 
 local function instantFarmAll(button)
     pcall(function()
         button.Text = "MEMPROSES..."
-        button.BackgroundColor3 = Color3.fromRGB(255, 165, 0)
+        button.BackgroundColor3 = Color3.fromRGB(255, 165, 0) -- Oranye
 
         local fishList = workspace:FindFirstChild("FishModelList")
         if not fishList then return end
@@ -106,43 +104,65 @@ local function printAllFishInfo()
     print("Total ikan aktif ditemukan: " .. count)
 end
 
--- =============================================================================================
--- FUNGSI-FUNGSI INTI & UI
--- =============================================================================================
-
-local function getRoot()
-    local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
-    return character:WaitForChild("HumanoidRootPart")
-end
+-- ===================================================================
+-- FUNGSI PEMBUATAN UI (DIBANGUN ULANG TOTAL)
+-- ===================================================================
 
 local function buildUI()
     local pg = localPlayer:FindFirstChild("PlayerGui") or localPlayer:WaitForChild("PlayerGui")
     if screenGui then pcall(function() screenGui:Destroy() end) end
 
     screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "FishFarmUI"
+    screenGui.Name = "FishFarmUI_Stable"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = pg
 
-    sidebarFrame = Instance.new("Frame")
+    local sidebarFrame = Instance.new("Frame")
     sidebarFrame.Size = UDim2.new(0, 280, 0, 580)
     sidebarFrame.Position = UDim2.new(0, 10, 0, 120)
     sidebarFrame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+    sidebarFrame.BorderSizePixel = 0
     sidebarFrame.Parent = screenGui
     
-    sidebarHeader = Instance.new("Frame")
+    local sidebarHeader = Instance.new("Frame")
     sidebarHeader.Size = UDim2.new(1, 0, 0, 30)
+    sidebarHeader.Position = UDim2.new(0, 0, 0, 0)
     sidebarHeader.BackgroundColor3 = Color3.fromRGB(35,35,35)
+    sidebarHeader.BorderSizePixel = 0
     sidebarHeader.Parent = sidebarFrame
 
     local headerLabel = Instance.new("TextLabel")
-    headerLabel.Size = UDim2.new(1, -60, 1, 0); headerLabel.Position = UDim2.new(0, 10, 0, 0); headerLabel.Text = "DEV TESTER MENU"; headerLabel.TextColor3 = Color3.new(1,1,1); headerLabel.Font = Enum.Font.GothamBold; headerLabel.TextSize = 14; headerLabel.TextXAlignment = Enum.TextXAlignment.Left; headerLabel.BackgroundTransparency=1; headerLabel.Parent = sidebarHeader
+    headerLabel.Size = UDim2.new(1, -60, 1, 0)
+    headerLabel.Position = UDim2.new(0, 10, 0, 0)
+    headerLabel.BackgroundTransparency = 1
+    headerLabel.Font = Enum.Font.GothamBold
+    headerLabel.TextSize = 14
+    headerLabel.Text = "DEV TESTER MENU"
+    headerLabel.TextXAlignment = Enum.TextXAlignment.Left
+    headerLabel.TextColor3 = Color3.new(1,1,1)
+    headerLabel.Parent = sidebarHeader
 
     local minimizeBtn = Instance.new("TextButton")
-    minimizeBtn.Size = UDim2.new(0, 25, 0, 25); minimizeBtn.Position = UDim2.new(1, -55, 0, 2.5); minimizeBtn.Text = "−"; minimizeBtn.Font = Enum.Font.GothamBold; minimizeBtn.TextSize = 18; minimizeBtn.TextColor3 = Color3.new(1,1,1); minimizeBtn.BackgroundColor3 = Color3.fromRGB(50,50,50); minimizeBtn.BorderSizePixel = 0; minimizeBtn.Parent = sidebarHeader
+    minimizeBtn.Size = UDim2.new(0, 25, 0, 25)
+    minimizeBtn.Position = UDim2.new(1, -55, 0, 2.5)
+    minimizeBtn.Text = "−"
+    minimizeBtn.Font = Enum.Font.GothamBold
+    minimizeBtn.TextSize = 18
+    minimizeBtn.TextColor3 = Color3.new(1,1,1)
+    minimizeBtn.BackgroundColor3 = Color3.fromRGB(50,50,50)
+    minimizeBtn.BorderSizePixel = 0
+    minimizeBtn.Parent = sidebarHeader
 
     local sidebarCloseBtn = Instance.new("TextButton")
-    sidebarCloseBtn.Size = UDim2.new(0, 25, 0, 25); sidebarCloseBtn.Position = UDim2.new(1, -28, 0, 2.5); sidebarCloseBtn.Text = "×"; sidebarCloseBtn.Font = Enum.Font.GothamBold; sidebarCloseBtn.TextSize = 16; sidebarCloseBtn.TextColor3 = Color3.new(1,1,1); sidebarCloseBtn.BackgroundColor3 = Color3.fromRGB(160,50,50); sidebarCloseBtn.BorderSizePixel = 0; sidebarCloseBtn.Parent = sidebarHeader
+    sidebarCloseBtn.Size = UDim2.new(0, 25, 0, 25)
+    sidebarCloseBtn.Position = UDim2.new(1, -28, 0, 2.5)
+    sidebarCloseBtn.Text = "×"
+    sidebarCloseBtn.Font = Enum.Font.GothamBold
+    sidebarCloseBtn.TextSize = 16
+    sidebarCloseBtn.TextColor3 = Color3.new(1,1,1)
+    sidebarCloseBtn.BackgroundColor3 = Color3.fromRGB(160,50,50)
+    sidebarCloseBtn.BorderSizePixel = 0
+    sidebarCloseBtn.Parent = sidebarHeader
 
     do -- Draggable logic
         local dragging, dragStart, startPos
@@ -151,23 +171,51 @@ local function buildUI()
         game:GetService("UserInputService").InputChanged:Connect(function(input) if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then local delta = input.Position - dragStart; sidebarFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y) end end)
     end
 
-    tabContainer = Instance.new("Frame")
-    tabContainer.Size = UDim2.new(1, 0, 0, 35); tabContainer.Position = UDim2.new(0, 0, 0, 30); tabContainer.BackgroundColor3 = Color3.fromRGB(30,30,30); tabContainer.BorderSizePixel = 0; tabContainer.Parent = sidebarFrame
+    local tabContainer = Instance.new("Frame")
+    tabContainer.Size = UDim2.new(1, 0, 0, 35)
+    tabContainer.Position = UDim2.new(0, 0, 0, 30)
+    tabContainer.BackgroundColor3 = Color3.fromRGB(30,30,30)
+    tabContainer.BorderSizePixel = 0
+    tabContainer.Parent = sidebarFrame
     
-    farmTab = Instance.new("TextButton")
-    farmTab.Size = UDim2.new(0.5, -1, 1, 0); farmTab.Position = UDim2.new(0, 0, 0, 0); farmTab.Font = Enum.Font.Gotham; farmTab.TextSize = 12; farmTab.Text = "Farm"; farmTab.BackgroundColor3 = Color3.fromRGB(45,45,45); farmTab.TextColor3 = Color3.new(1,1,1); farmTab.BorderSizePixel = 0; farmTab.Parent = tabContainer
+    local farmTab = Instance.new("TextButton")
+    farmTab.Size = UDim2.new(0.5, 0, 1, 0)
+    farmTab.Position = UDim2.new(0, 0, 0, 0)
+    farmTab.Font = Enum.Font.Gotham
+    farmTab.TextSize = 12
+    farmTab.Text = "Farm"
+    farmTab.BackgroundColor3 = Color3.fromRGB(45,45,45)
+    farmTab.TextColor3 = Color3.new(1,1,1)
+    farmTab.BorderSizePixel = 0
+    farmTab.Parent = tabContainer
 
-    generalTab = Instance.new("TextButton")
-    generalTab.Size = UDim2.new(0.5, 0, 1, 0); generalTab.Position = UDim2.new(0.5, 0, 0, 0); generalTab.Font = Enum.Font.Gotham; generalTab.TextSize = 12; generalTab.Text = "General"; generalTab.BackgroundColor3 = Color3.fromRGB(30,30,30); generalTab.TextColor3 = Color3.fromRGB(180,180,180); generalTab.BorderSizePixel = 0; generalTab.Parent = tabContainer
+    local generalTab = Instance.new("TextButton")
+    generalTab.Size = UDim2.new(0.5, 0, 1, 0)
+    generalTab.Position = UDim2.new(0.5, 0, 0, 0)
+    generalTab.Font = Enum.Font.Gotham
+    generalTab.TextSize = 12
+    generalTab.Text = "General"
+    generalTab.BackgroundColor3 = Color3.fromRGB(30,30,30)
+    generalTab.TextColor3 = Color3.fromRGB(180,180,180)
+    generalTab.BorderSizePixel = 0
+    generalTab.Parent = tabContainer
 
     local contentContainer = Instance.new("Frame")
-    contentContainer.Size = UDim2.new(1, -10, 1, -70); contentContainer.Position = UDim2.new(0, 5, 0, 65); contentContainer.BackgroundTransparency = 1; contentContainer.Parent = sidebarFrame
+    contentContainer.Size = UDim2.new(1, -10, 1, -70)
+    contentContainer.Position = UDim2.new(0, 5, 0, 65)
+    contentContainer.BackgroundTransparency = 1
+    contentContainer.Parent = sidebarFrame
     
-    farmContent = Instance.new("Frame")
-    farmContent.Size = UDim2.new(1,0,1,0); farmContent.BackgroundTransparency = 1; farmContent.Parent = contentContainer
+    local farmContent = Instance.new("Frame")
+    farmContent.Size = UDim2.new(1,0,1,0)
+    farmContent.BackgroundTransparency = 1
+    farmContent.Parent = contentContainer
 
-    generalContent = Instance.new("Frame")
-    generalContent.Size = UDim2.new(1,0,1,0); generalContent.BackgroundTransparency = 1; generalContent.Visible = false; generalContent.Parent = contentContainer
+    local generalContent = Instance.new("Frame")
+    generalContent.Size = UDim2.new(1,0,1,0)
+    generalContent.BackgroundTransparency = 1
+    generalContent.Visible = false
+    generalContent.Parent = contentContainer
     
     local genScroll = Instance.new("ScrollingFrame")
     genScroll.Size = UDim2.new(1, 0, 1, 0); genScroll.CanvasSize = UDim2.new(0, 0, 0, 450); genScroll.BackgroundTransparency = 1; genScroll.BorderSizePixel = 0; genScroll.ScrollBarThickness = 6; genScroll.Parent = generalContent
@@ -188,13 +236,11 @@ local function buildUI()
 
     local currentY = 10
     currentY = createDevSection("Player Control", currentY)
-    
-    -- **PERBAIKAN LOGIKA:** Nilai default digunakan saat membuat UI. Callback akan menangani karakter saat ada.
     currentY = createDevSlider("WalkSpeed", currentY, 16, 200, 16, function(v) local char = localPlayer.Character; if char and char:FindFirstChild("Humanoid") then char.Humanoid.WalkSpeed = v end end)
     currentY = createDevSlider("JumpPower", currentY, 50, 300, 50, function(v) local char = localPlayer.Character; if char and char:FindFirstChild("Humanoid") then char.Humanoid.JumpPower = v end end)
 
     currentY = createDevSection("Instant Actions", currentY + 10)
-    local farmAllButton = Instance.new("TextButton"); farmAllButton.Size = UDim2.new(1, -20, 0, 40); farmAllButton.Position = UDim2.new(0, 10, 0, currentY); farmAllButton.Text = "Instant Farm All (DEV)"; farmAllButton.BackgroundColor3 = Color3.fromRGB(220, 20, 60); farmAllButton.Font = Enum.Font.GothamBold; farmAllButton.Parent = genScroll; farmAllButton.TextColor3=Color3.new(1,1,1)
+    local farmAllButton = Instance.new("TextButton"); farmAllButton.Size = UDim2.new(1, -20, 0, 40); farmAllButton.Position = UDim2.new(0, 10, 0, currentY); farmAllButton.Text = "Instant Farm All (DEV)"; farmAllButton.BackgroundColor3 = Color3.fromRGB(220, 20, 60); farmAllButton.Font = Enum.Font.GothamBold; farmAllButton.TextColor3=Color3.new(1,1,1); farmAllButton.Parent = genScroll
     farmAllButton.MouseButton1Click:Connect(function() instantFarmAll(farmAllButton) end)
     currentY = currentY + 50
     
@@ -252,9 +298,16 @@ local function buildUI()
     sidebarCloseBtn.MouseButton1Click:Connect(function() screenGui:Destroy() end)
 end
 
--- Sisa dari script (logika inti game) tidak berubah dan sudah terbukti bekerja
-local spots = { {name="Spot 1", pos=Vector3.new(-26.609,115.715,-285.779)}, {name="Spot 2", pos=Vector3.new(-26.456,113.007,-154.013)}, {name="Spot 3", pos=Vector3.new(-24.498,116.377,-2.832)}, }
-local ETERNAL_NAMES = { SFish1 = "Loch Ness", SFish2 = "Skeleton", SFish3 = "Sea Elf", SFish4 = "Godzilla", }
+local spots = {
+    {name="Spot 1", pos=Vector3.new(-26.609,115.715,-285.779)},
+    {name="Spot 2", pos=Vector3.new(-26.456,113.007,-154.013)},
+    {name="Spot 3", pos=Vector3.new(-24.498,116.377,-2.832)},
+}
+
+local ETERNAL_NAMES = {
+    SFish1 = "Loch Ness", SFish2 = "Skeleton", SFish3 = "Sea Elf", SFish4 = "Godzilla",
+}
+
 local function getActiveEternal() local fishList = workspace:FindFirstChild("FishModelList"); if not fishList then return nil end; for _, m in ipairs(fishList:GetChildren()) do if m:IsA("Model") and ETERNAL_NAMES[m.Name] then local hum = m:FindFirstChildOfClass("Humanoid"); if hum and hum.Health > 0 then return m, hum end end end; return nil end
 local function getFishData(fishName) local fishNumber = tonumber(string.match(fishName, "Fish(%d+)")) or 0; if fishNumber > 0 then if fishNumber >= 12 then return {rarity="mythical", priority=6} elseif fishNumber >= 11 then return {rarity="legendary", priority=5} elseif fishNumber >= 9 then return {rarity="epic", priority=4} elseif fishNumber >= 7 then return {rarity="rare", priority=3} elseif fishNumber >= 3 then return {rarity="uncommon", priority=2} else return {rarity="common", priority=1} end end; return nil end
 local function getRegularFish() local fishList = workspace:FindFirstChild("FishModelList"); if not fishList then return nil end; local myPos = getRoot().Position; local availableFish = {}; for _, m in ipairs(fishList:GetChildren()) do if m:IsA("Model") and not ETERNAL_NAMES[m.Name] then local fishData = getFishData(m.Name); if fishData and rarityFilter[fishData.rarity] then local hum = m:FindFirstChildOfClass("Humanoid"); if hum and hum.Health > 0 then local dist = (m:GetModelCFrame().p - myPos).Magnitude; if dist < 200 then table.insert(availableFish, {model=m, humanoid=hum, priority=fishData.priority, distance=dist}) end end end end end; if #availableFish == 0 then return nil end; table.sort(availableFish, function(a, b) if a.priority == b.priority then return a.distance < b.distance else return a.priority > b.priority end end); return availableFish[1].model, availableFish[1].humanoid end
@@ -265,34 +318,29 @@ local function releaseCamera() camera.CameraType = Enum.CameraType.Custom end
 local function teleportToSpot(index) if not autoTeleport or (tick() - lastTpTime < TP_COOLDOWN) then return end; local sp = spots[index]; if not sp then return end; getRoot().CFrame = CFrame.new(sp.pos); currentSpotIndex = index; lastTpTime = tick(); if autoFly then startFlying() end end
 local function getNearestSpot(toPos) local bestIndex, bestDist = 1, math.huge; for i, sp in ipairs(spots) do local d = (sp.pos - toPos).Magnitude; if d < bestDist then bestDist = d; bestIndex = i end end; return bestIndex end
 
--- Inisialisasi
+-- Inisialisasi dan Loop Utama
 pcall(buildUI)
-print("Script Tester Game Gabungan Siap Digunakan. UI telah diperbaiki total.")
+print("Script Final Telah Dimuat. UI direkonstruksi untuk stabilitas.")
 
--- Loop Utama
 RunService.Heartbeat:Connect(function()
     if not (screenGui and screenGui.Parent) then return end
-
     local targetModel
     targetModel, _ = getActiveEternal()
     if not targetModel then
         targetModel, _ = getRegularFish()
     end
-
     if targetModel and targetModel.PrimaryPart then
         local targetPos = targetModel.PrimaryPart.Position
-        info.Text = targetModel.Name
-        distLabel.Text = string.format("Jarak: %.1f", (targetPos - getRoot().Position).Magnitude)
+        local infoLabel = screenGui:FindFirstChild("sidebarFrame", true):FindFirstChild("info", true)
+        if infoLabel then infoLabel.Text = targetModel.Name end
         focusCameraOn(targetPos)
         local nearestIndex = getNearestSpot(targetPos)
-        anchorLabel.Text = "Spot Terdekat: " .. spots[nearestIndex].name
         if currentSpotIndex ~= nearestIndex then
             teleportToSpot(nearestIndex)
         end
     else
         releaseCamera()
-        info.Text = "Mencari ikan..."
-        distLabel.Text = "Jarak: -"
-        anchorLabel.Text = "Spot Terdekat: -"
+        local infoLabel = screenGui:FindFirstChild("sidebarFrame", true):FindFirstChild("info", true)
+        if infoLabel then infoLabel.Text = "Mencari ikan..." end
     end
 end)
