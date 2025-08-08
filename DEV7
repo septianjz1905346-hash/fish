@@ -1,0 +1,245 @@
+-- Script Tester Game Final (Dibangun Ulang)
+-- MODIFIKASI: Mengembalikan kontrol yang hilang di Tab Farm
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local localPlayer = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- ===================================================================
+-- PENGATURAN & VARIABEL GLOBAL
+-- ===================================================================
+local autoFocus = true
+local autoTeleport = true
+local autoFly = true
+local autoStart = true -- Dikembalikan
+local flying = false
+local currentSpotIndex = nil
+local lastTpTime = 0
+local TP_COOLDOWN = 1.8
+
+-- DAFTAR IKAN BARU UNTUK MENU PANGGIL
+local summonableFish = {
+    "SFish1", "SFish2", "SFish3", "SFish4",
+    "Fish1", "Fish2", "Fish3", "Fish4", "Fish5", "Fish6", "Fish7", "Fish8", "Fish9", "Fish10", "Fish11", "Fish12",
+    "Black1", "Black2", "Black3", "Black4"
+}
+
+local screenGui -- Referensi utama untuk UI
+
+-- ===================================================================
+-- FUNGSI UNTUK FITUR DEVELOPER
+-- ===================================================================
+
+local function instantKillAllFish(button)
+    pcall(function()
+        button.Text = "MEMPROSES..."
+        button.BackgroundColor3 = Color3.fromRGB(255, 165, 0)
+
+        local fishList = workspace:FindFirstChild("FishModelList")
+        if not fishList then return end
+
+        for _, m in ipairs(fishList:GetChildren()) do
+            if m:IsA("Model") and m:FindFirstChild("Humanoid") then
+                m.Humanoid.Health = 1
+            end
+        end
+        task.wait(0.1)
+
+        local screenSize = workspace.CurrentCamera.ViewportSize
+        VirtualInputManager:SendMouseButtonEvent(screenSize.X / 2, screenSize.Y / 2, 0, true, game, 0)
+        task.wait(0.5)
+        VirtualInputManager:SendMouseButtonEvent(screenSize.X / 2, screenSize.Y / 2, 0, false, game, 0)
+        
+        button.Text = "Instant Kill All Fish"
+        button.BackgroundColor3 = Color3.fromRGB(220, 20, 60)
+    end)
+end
+
+local function setWeather(preset)
+    local Lighting = game:GetService("Lighting")
+    if preset == "Pagi" then
+        Lighting.ClockTime = 8; Lighting.Brightness = 2; Lighting.FogEnd = 100000
+        if Lighting:FindFirstChild("Atmosphere") then Lighting.Atmosphere:Destroy() end
+    elseif preset == "Malam" then
+        Lighting.ClockTime = 22; Lighting.Brightness = 1
+    elseif preset == "Mendung" then
+        Lighting.ClockTime = 14; Lighting.Brightness = 1.2; Lighting.FogEnd = 2000
+        if not Lighting:FindFirstChild("Atmosphere") then Instance.new("Atmosphere", Lighting) end
+        Lighting.Atmosphere.Density = 0.4
+    end
+    print("Cuaca diubah menjadi:", preset)
+end
+
+local function summonFish(fishName)
+    if not fishName or fishName == "" then return end
+    local fishList = workspace:FindFirstChild("FishModelList")
+    local playerRoot = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not (fishList and playerRoot) then return end
+
+    local targetFish = fishList:FindFirstChild(fishName)
+    if targetFish and targetFish:IsA("Model") and targetFish.PrimaryPart then
+        targetFish:SetPrimaryPartCFrame(playerRoot.CFrame * CFrame.new(0, 2, -15))
+        print("Ikan '" .. fishName .. "' telah dipanggil.")
+    else
+        print("Ikan dengan nama '" .. fishName .. "' tidak ditemukan.")
+    end
+end
+
+-- ===================================================================
+-- FUNGSI INTI & PEMBUATAN UI
+-- ===================================================================
+
+local function getRoot()
+    local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+    return character:WaitForChild("HumanoidRootPart")
+end
+
+local function buildUI()
+    local pg = localPlayer:FindFirstChild("PlayerGui") or localPlayer:WaitForChild("PlayerGui")
+    if screenGui then pcall(function() screenGui:Destroy() end) end
+
+    screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "FishFarmUI_Rebuilt_V2"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = pg
+
+    local sidebarFrame = Instance.new("Frame")
+    sidebarFrame.Size = UDim2.new(0, 320, 0, 450)
+    sidebarFrame.Position = UDim2.new(0, 10, 0, 120)
+    sidebarFrame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+    sidebarFrame.Parent = sidebarFrame
+
+    local sidebarHeader = Instance.new("Frame")
+    sidebarHeader.Size = UDim2.new(1, 0, 0, 30); sidebarHeader.BackgroundColor3 = Color3.fromRGB(35,35,35); sidebarHeader.Parent = sidebarFrame
+
+    local headerLabel = Instance.new("TextLabel")
+    headerLabel.Size = UDim2.new(1, -60, 1, 0); headerLabel.Position = UDim2.new(0, 10, 0, 0); headerLabel.Text = "FISHING MENU"; headerLabel.TextColor3 = Color3.new(1,1,1); headerLabel.Font = Enum.Font.GothamBold; headerLabel.TextSize = 14; headerLabel.TextXAlignment = Enum.TextXAlignment.Left; headerLabel.BackgroundTransparency=1; headerLabel.Parent = sidebarHeader
+
+    local minimizeBtn = Instance.new("TextButton")
+    minimizeBtn.Size = UDim2.new(0, 25, 0, 25); minimizeBtn.Position = UDim2.new(1, -55, 0, 2.5); minimizeBtn.Text = "−"; minimizeBtn.Parent = sidebarHeader
+    
+    local sidebarCloseBtn = Instance.new("TextButton")
+    sidebarCloseBtn.Size = UDim2.new(0, 25, 0, 25); sidebarCloseBtn.Position = UDim2.new(1, -28, 0, 2.5); sidebarCloseBtn.Text = "×"; sidebarCloseBtn.Parent = sidebarHeader
+
+    do -- Draggable logic
+        local dragging, dragStart, startPos
+        sidebarHeader.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true; dragStart = input.Position; startPos = sidebarFrame.Position end end)
+        sidebarHeader.InputEnded:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
+        game:GetService("UserInputService").InputChanged:Connect(function(input) if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then local delta = input.Position - dragStart; sidebarFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y) end end)
+    end
+
+    local tabContainer = Instance.new("Frame")
+    tabContainer.Size = UDim2.new(1, 0, 0, 35); tabContainer.Position = UDim2.new(0, 0, 0, 30); tabContainer.BackgroundColor3 = Color3.fromRGB(30,30,30); tabContainer.Parent = sidebarFrame
+    
+    local farmTab = Instance.new("TextButton"); farmTab.Size = UDim2.new(0.5, 0, 1, 0); farmTab.Text = "Farm"; farmTab.Parent = tabContainer
+    local devTab = Instance.new("TextButton"); devTab.Size = UDim2.new(0.5, 0, 1, 0); devTab.Position = UDim2.new(0.5, 0, 0, 0); devTab.Text = "Developer"; devTab.Parent = tabContainer
+
+    local contentContainer = Instance.new("Frame")
+    contentContainer.Size = UDim2.new(1, -10, 1, -70); contentContainer.Position = UDim2.new(0, 5, 0, 65); contentContainer.BackgroundTransparency = 1; contentContainer.Parent = sidebarFrame
+    
+    local farmContent = Instance.new("Frame"); farmContent.Size=UDim2.new(1,0,1,0); farmContent.BackgroundTransparency=1; farmContent.Parent = contentContainer
+    local devContent = Instance.new("Frame"); devContent.Size=UDim2.new(1,0,1,0); devContent.BackgroundTransparency=1; devContent.Visible = false; devContent.Parent = contentContainer
+
+    local function switchTab(tabName)
+        farmContent.Visible = (tabName == "farm")
+        devContent.Visible = (tabName == "dev")
+        farmTab.BackgroundColor3 = (tabName == "farm") and Color3.fromRGB(45,45,45) or Color3.fromRGB(30,30,30)
+        devTab.BackgroundColor3 = (tabName == "dev") and Color3.fromRGB(45,45,45) or Color3.fromRGB(30,30,30)
+    end
+    farmTab.MouseButton1Click:Connect(function() switchTab("farm") end)
+    devTab.MouseButton1Click:Connect(function() switchTab("dev") end)
+    switchTab("farm")
+    
+    -- KONTEN TAB "FARM" (DIKEMBALIKAN)
+    local info = Instance.new("TextLabel"); info.Size=UDim2.new(1,-10,0,20); info.Position=UDim2.new(0,5,0,5); info.Text="Mencari Target..."; info.Parent=farmContent
+    local distLabel = Instance.new("TextLabel"); distLabel.Size=UDim2.new(1,-10,0,20); distLabel.Position=UDim2.new(0,5,0,25); distLabel.Text="Jarak: -"; distLabel.Parent=farmContent
+    local anchorLabel = Instance.new("TextLabel"); anchorLabel.Size=UDim2.new(1,-10,0,20); anchorLabel.Position=UDim2.new(0,5,0,45); anchorLabel.Text="Spot Terdekat: -"; anchorLabel.Parent=farmContent
+
+    local function createToggle(name, yPos, parent, stateVarName, callback)
+        local button = Instance.new("TextButton"); button.Size=UDim2.new(1,-10,0,30); button.Position=UDim2.new(0,5,0,yPos); button.Text=name..": "..(_G[stateVarName] and "ON" or "OFF"); button.Parent=parent
+        button.BackgroundColor3 = _G[stateVarName] and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+        button.MouseButton1Click:Connect(function()
+            _G[stateVarName] = not _G[stateVarName]
+            button.Text = name..": "..(_G[stateVarName] and "ON" or "OFF")
+            button.BackgroundColor3 = _G[stateVarName] and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+            if callback then callback() end
+        end)
+    end
+    createToggle("Auto Focus", 80, farmContent, "autoFocus")
+    createToggle("Auto Teleport", 120, farmContent, "autoTeleport")
+    createToggle("Auto Fly", 160, farmContent, "autoFly", function() if not autoFly and flying then stopFlying() end end)
+    createToggle("Auto Start", 200, farmContent, "autoStart")
+
+    -- KONTEN TAB "DEVELOPER"
+    local devScroll = Instance.new("ScrollingFrame"); devScroll.Size=UDim2.new(1,0,1,0); devScroll.CanvasSize=UDim2.new(0,0,0,550); devScroll.BackgroundTransparency=1; devScroll.Parent=devContent
+    local killBtn = Instance.new("TextButton"); killBtn.Size=UDim2.new(1,-10,0,40); killBtn.Position=UDim2.new(0,5,0,10); killBtn.Text="Instant Kill All Fish"; killBtn.BackgroundColor3=Color3.fromRGB(220,20,60); killBtn.Parent=devScroll
+    killBtn.MouseButton1Click:Connect(function() instantKillAllFish(killBtn) end)
+    
+    local weatherLabel = Instance.new("TextLabel"); weatherLabel.Size=UDim2.new(1,-10,0,20); weatherLabel.Position=UDim2.new(0,5,0,60); weatherLabel.Text="Ubah Cuaca:"; weatherLabel.Parent=devScroll
+    local pagiBtn = Instance.new("TextButton"); pagiBtn.Size=UDim2.new(0.33,-5,0,30); pagiBtn.Position=UDim2.new(0,5,0,85); pagiBtn.Text="Pagi"; pagiBtn.Parent=devScroll; pagiBtn.MouseButton1Click:Connect(function() setWeather("Pagi") end)
+    local malamBtn = Instance.new("TextButton"); malamBtn.Size=UDim2.new(0.33,-5,0,30); malamBtn.Position=UDim2.new(0.33,5,0,85); malamBtn.Text="Malam"; malamBtn.Parent=devScroll; malamBtn.MouseButton1Click:Connect(function() setWeather("Malam") end)
+    local mendungBtn = Instance.new("TextButton"); mendungBtn.Size=UDim2.new(0.33,-5,0,30); mendungBtn.Position=UDim2.new(0.66,5,0,85); mendungBtn.Text="Mendung"; mendungBtn.Parent=devScroll; mendungBtn.MouseButton1Click:Connect(function() setWeather("Mendung") end)
+    
+    local summonLabel = Instance.new("TextLabel"); summonLabel.Size=UDim2.new(1,-10,0,20); summonLabel.Position=UDim2.new(0,5,0,125); summonLabel.Text="Pilih Ikan untuk Dipanggil:"; summonLabel.Parent=devScroll
+    local summonListFrame = Instance.new("ScrollingFrame"); summonListFrame.Size=UDim2.new(1,-10,0,150); summonListFrame.Position=UDim2.new(0,5,0,150); summonListFrame.CanvasSize=UDim2.new(0,0,0, #summonableFish * 35); summonListFrame.Parent=devScroll
+    for i, fishName in ipairs(summonableFish) do
+        local fishBtn = Instance.new("TextButton"); fishBtn.Size=UDim2.new(1,-10,0,30); fishBtn.Position=UDim2.new(0,5,0,(i-1)*35); fishBtn.Text=fishName; fishBtn.Parent=summonListFrame
+        fishBtn.MouseButton1Click:Connect(function() summonFish(fishName) end)
+    end
+end
+
+-- ===================================================================
+-- LOGIKA INTI (DARI SCRIPT ASLI)
+-- ===================================================================
+
+local spots = { {name="Spot 1", pos=Vector3.new(-26.609,115.715,-285.779)}, {name="Spot 2", pos=Vector3.new(-26.456,113.007,-154.013)}, {name="Spot 3", pos=Vector3.new(-24.498,116.377,-2.832)}, }
+local ETERNAL_NAMES = { SFish1 = "Loch Ness", SFish2 = "Skeleton", SFish3 = "Sea Elf", SFish4 = "Godzilla", }
+
+local function getActiveEternal() local fishList = workspace:FindFirstChild("FishModelList"); if not fishList then return nil end; for _, m in ipairs(fishList:GetChildren()) do if m:IsA("Model") and ETERNAL_NAMES[m.Name] then local hum = m:FindFirstChildOfClass("Humanoid"); if hum and hum.Health > 0 then return m, hum end end end; return nil end
+local function getRegularFish() local fishList = workspace:FindFirstChild("FishModelList"); if not fishList then return nil end; local myPos = getRoot().Position; local availableFish = {}; for _, m in ipairs(fishList:GetChildren()) do if m:IsA("Model") and not ETERNAL_NAMES[m.Name] then local hum = m:FindFirstChildOfClass("Humanoid"); if hum and hum.Health > 0 then local dist = (m:GetModelCFrame().p - myPos).Magnitude; if dist < 200 then table.insert(availableFish, {model=m, humanoid=hum, distance=dist}) end end end end; if #availableFish == 0 then return nil end; table.sort(availableFish, function(a, b) return a.distance < b.distance end); return availableFish[1].model, availableFish[1].humanoid end
+local function startFlying() if flying then return end; flying = true; local root = getRoot(); local bv = Instance.new("BodyVelocity", root); bv.MaxForce = Vector3.new(math.huge,math.huge,math.huge); bv.Velocity = Vector3.new(0,0,0); local bg = Instance.new("BodyGyro", root); bg.MaxTorque = Vector3.new(0,math.huge,0) end
+local function stopFlying() if not flying then return end; flying = false; local root = getRoot(); if root then for _,v in ipairs(root:GetChildren()) do if v:IsA("BodyMover") then v:Destroy() end end end end
+local function focusCameraOn(position) if not autoFocus then return end; camera.CameraType = Enum.CameraType.Scriptable; camera.CFrame = CFrame.lookAt(camera.CFrame.Position, position) end
+local function releaseCamera() camera.CameraType = Enum.CameraType.Custom end
+local function teleportToSpot(index) if not autoTeleport or (tick() - lastTpTime < TP_COOLDOWN) then return end; local sp = spots[index]; if not sp then return end; getRoot().CFrame = CFrame.new(sp.pos); currentSpotIndex = index; lastTpTime = tick(); if autoFly then startFlying() end end
+local function getNearestSpot(toPos) local bestIndex, bestDist = 1, math.huge; for i, sp in ipairs(spots) do local d = (sp.pos - toPos).Magnitude; if d < bestDist then bestDist = d; bestIndex = i end end; return bestIndex end
+
+-- Inisialisasi dan Loop Utama
+pcall(buildUI)
+print("Script Final (Perbaikan Tampilan) Siap Digunakan.")
+
+RunService.Heartbeat:Connect(function()
+    if not (screenGui and screenGui.Parent) then return end
+
+    local targetModel
+    targetModel, _ = getActiveEternal()
+    if not targetModel then
+        targetModel, _ = getRegularFish()
+    end
+
+    local infoLabel = screenGui:FindFirstChild("info", true)
+    local distLabel = screenGui:FindFirstChild("distLabel", true)
+    local anchorLabel = screenGui:FindFirstChild("anchorLabel", true)
+
+    if targetModel and targetModel.PrimaryPart then
+        local targetPos = targetModel.PrimaryPart.Position
+        if infoLabel then infoLabel.Text = targetModel.Name end
+        if distLabel then distLabel.Text = string.format("Jarak: %.1f", (targetPos - getRoot().Position).Magnitude) end
+        
+        focusCameraOn(targetPos)
+        
+        local nearestIndex = getNearestSpot(targetPos)
+        if anchorLabel then anchorLabel.Text = "Spot Terdekat: " .. spots[nearestIndex].name end
+        
+        if currentSpotIndex ~= nearestIndex then
+            teleportToSpot(nearestIndex)
+        end
+    else
+        releaseCamera()
+        if infoLabel then infoLabel.Text = "Mencari ikan..." end
+        if distLabel then distLabel.Text = "Jarak: -" end
+        if anchorLabel then anchorLabel.Text = "Spot Terdekat: -" end
+    end
+end)
