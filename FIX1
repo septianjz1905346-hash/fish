@@ -1,0 +1,214 @@
+-- ===================================================================
+-- SCRIPT DENGAN UI TABS (PERBAIKAN FINAL FUNGSI GESER)
+-- ===================================================================
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local localPlayer = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- ===================================================================
+-- PENGATURAN & VARIABEL GLOBAL
+-- ===================================================================
+autoFocus = true
+autoTeleport = true
+autoFly = true
+autoCollectAquarium = true
+
+-- Filter Target Kelangkaan (Default: Semua ON)
+filterCommon = true
+filterUncommon = true
+filterRare = true
+filterEpic = true
+filterLegendary = true
+filterMythical = true
+filterEternal = true
+
+local flying = false
+local currentSpotIndex = nil
+local lastTpTime = 0
+local TP_COOLDOWN = 1.8
+
+local spots = {
+    {name="Spot 1", pos=Vector3.new(-26.609,115.715,-285.779)},
+    {name="Spot 2", pos=Vector3.new(-26.456,113.007,-154.013)},
+    {name="Spot 3", pos=Vector3.new(-24.498,116.377,-2.832)},
+}
+
+local ETERNAL_NAMES = {
+    SFish1 = "Loch Ness", SFish2 = "Skeleton",
+    SFish3 = "Sea Elf", SFish4 = "Godzilla",
+}
+
+local screenGui
+local infoLabel, distLabel, anchorLabel, posLabel, jenisLabel
+
+-- ===================================================================
+-- FUNGSI INTI & PEMBUATAN UI
+-- ===================================================================
+
+local function getRoot()
+    return (localPlayer.Character or localPlayer.CharacterAdded:Wait()):WaitForChild("HumanoidRootPart")
+end
+
+local function getCharacter()
+    return localPlayer.Character or localPlayer.CharacterAdded:Wait()
+end
+
+local function buildUI()
+    if screenGui then pcall(function() screenGui:Destroy() end) end
+
+    screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "FarmUITabs_FinalDragFix"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
+
+    local sidebarFrame = Instance.new("Frame")
+    sidebarFrame.Size = UDim2.new(0, 300, 0, 450)
+    sidebarFrame.Position = UDim2.new(0.1, 0, 0.1, 0)
+    sidebarFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    sidebarFrame.BorderSizePixel = 1
+    sidebarFrame.BorderColor3 = Color3.fromRGB(80, 80, 80)
+    sidebarFrame.Parent = screenGui
+
+    local sidebarHeader = Instance.new("Frame")
+    sidebarHeader.Size = UDim2.new(1, 0, 0, 30)
+    sidebarHeader.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    sidebarHeader.Active = true
+    sidebarHeader.Draggable = true -- Fitur geser utama diaktifkan di sini
+    sidebarHeader.Parent = sidebarFrame
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Size = UDim2.new(1, 0, 1, 0)
+    titleLabel.Position = UDim2.new(0, 0, 0, 0)
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Center
+    titleLabel.Text = "FARMING MENU"
+    titleLabel.Font = Enum.Font.SourceSansBold
+    titleLabel.TextSize = 16
+    titleLabel.TextColor3 = Color3.new(1, 1, 1)
+    titleLabel.BackgroundTransparency = 1
+    -- ===========================================================
+    -- PERBAIKAN UTAMA AGAR JUDUL TIDAK BISA DIKLIK
+    -- ===========================================================
+    titleLabel.Active = false 
+    -- ===========================================================
+    titleLabel.Parent = sidebarHeader
+
+    local minimizeBtn = Instance.new("TextButton")
+    minimizeBtn.Size = UDim2.new(0, 25, 0, 25); minimizeBtn.Position = UDim2.new(1, -55, 0, 2.5); minimizeBtn.Text = "−"; minimizeBtn.Font = Enum.Font.SourceSansBold; minimizeBtn.Parent = sidebarHeader
+
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size = UDim2.new(0, 25, 0, 25); closeBtn.Position = UDim2.new(1, -28, 0, 2.5); closeBtn.Text = "×"; closeBtn.Font = Enum.Font.SourceSansBold; closeBtn.Parent = sidebarHeader
+
+    local tabContainer = Instance.new("Frame")
+    tabContainer.Size = UDim2.new(1, 0, 0, 35); tabContainer.Position = UDim2.new(0, 0, 0, 30); tabContainer.BackgroundColor3 = Color3.fromRGB(30,30,30); tabContainer.Parent = sidebarFrame
+
+    local farmTab = Instance.new("TextButton"); farmTab.Size = UDim2.new(0.5, 0, 1, 0); farmTab.Text = "Farm"; farmTab.Parent = tabContainer
+    local filterTab = Instance.new("TextButton"); filterTab.Size = UDim2.new(0.5, 0, 1, 0); filterTab.Position = UDim2.new(0.5, 0, 0, 0); filterTab.Text = "Filter"; filterTab.Parent = tabContainer
+    
+    local contentContainer = Instance.new("Frame")
+    contentContainer.Size = UDim2.new(1, 0, 1, -65); contentContainer.Position = UDim2.new(0, 0, 0, 65); contentContainer.BackgroundTransparency = 1; contentContainer.Parent = sidebarFrame
+
+    local farmContent = Instance.new("Frame"); farmContent.Size = UDim2.new(1,0,1,0); farmContent.BackgroundTransparency = 1; farmContent.Parent = contentContainer
+    local filterContent = Instance.new("Frame"); filterContent.Size = UDim2.new(1,0,1,0); filterContent.BackgroundTransparency = 1; filterContent.Visible = false; filterContent.Parent = contentContainer
+
+    local function switchTab(tabName)
+        farmContent.Visible = (tabName == "farm")
+        filterContent.Visible = (tabName == "filter")
+        farmTab.BackgroundColor3 = (tabName == "farm") and Color3.fromRGB(45,45,45) or Color3.fromRGB(30,30,30)
+        filterTab.BackgroundColor3 = (tabName == "filter") and Color3.fromRGB(45,45,45) or Color3.fromRGB(30,30,30)
+    end
+    farmTab.MouseButton1Click:Connect(function() switchTab("farm") end)
+    filterTab.MouseButton1Click:Connect(function() switchTab("filter") end)
+    switchTab("farm")
+
+    local isMinimized = false; local originalSize = sidebarFrame.Size
+    minimizeBtn.MouseButton1Click:Connect(function()
+        isMinimized = not isMinimized; contentContainer.Visible = not isMinimized; tabContainer.Visible = not isMinimized
+        if isMinimized then minimizeBtn.Text = "+"; sidebarFrame.Size = UDim2.new(0, 300, 0, 30)
+        else minimizeBtn.Text = "−"; sidebarFrame.Size = originalSize end
+    end)
+    closeBtn.MouseButton1Click:Connect(function() screenGui:Destroy() end)
+    
+    local function createToggle(name, parent, stateVarName, callback)
+        local button = Instance.new("TextButton"); button.Name = name .. "Toggle"; button.Size=UDim2.new(1,-10,0,30); button.Text=name..": "..(_G[stateVarName] and "ON" or "OFF"); button.Parent=parent; button.Font = Enum.Font.SourceSansBold
+        button.BackgroundColor3 = _G[stateVarName] and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60); button.TextColor3 = Color3.new(1,1,1)
+        button.MouseButton1Click:Connect(function()
+            _G[stateVarName] = not _G[stateVarName]; button.Text = name..": "..(_G[stateVarName] and "ON" or "OFF"); button.BackgroundColor3 = _G[stateVarName] and Color3.fromRGB(60,180,60) or Color3.fromRGB(180,60,60)
+            if callback then callback() end
+        end)
+    end
+    
+    -- KONTEN TAB "FARM"
+    local farmScroll = Instance.new("ScrollingFrame"); farmScroll.Size=UDim2.new(1,0,1,0); farmScroll.CanvasSize=UDim2.new(0,0,0,300); farmScroll.BackgroundTransparency=1; farmScroll.Parent=farmContent
+    local fList = Instance.new("UIListLayout"); fList.Padding = UDim.new(0, 5); fList.Parent = farmScroll
+    infoLabel = Instance.new("TextLabel"); infoLabel.Size=UDim2.new(1,-10,0,20); infoLabel.Text="Nama Ikan: -"; infoLabel.Parent=farmScroll
+    distLabel = Instance.new("TextLabel"); distLabel.Size=UDim2.new(1,-10,0,20); distLabel.Text="Jarak: -"; distLabel.Parent=farmScroll
+    anchorLabel = Instance.new("TextLabel"); anchorLabel.Size=UDim2.new(1,-10,0,20); anchorLabel.Text="Spot Terdekat: -"; anchorLabel.Parent=farmScroll
+    posLabel = Instance.new("TextLabel"); posLabel.Size=UDim2.new(1,-10,0,20); posLabel.Text="Posisi Lock: -"; posLabel.Parent=farmScroll
+    jenisLabel = Instance.new("TextLabel"); jenisLabel.Size=UDim2.new(1,-10,0,20); jenisLabel.Text="Jenis Ikan Lock: -"; jenisLabel.Parent=farmScroll
+    local separator1 = Instance.new("Frame"); separator1.Size=UDim2.new(1,-10,0,5); separator1.BackgroundTransparency=1; separator1.Parent=farmScroll
+    createToggle("Auto Focus", farmScroll, "autoFocus")
+    createToggle("Auto Teleport", farmScroll, "autoTeleport")
+    createToggle("Auto Fly", farmScroll, "autoFly", function() if not autoFly and flying then stopFlying() end end)
+    createToggle("Auto Kumpul Koin Akuarium", farmScroll, "autoCollectAquarium")
+
+    -- KONTEN TAB "FILTER"
+    local filterScroll = Instance.new("ScrollingFrame"); filterScroll.Size=UDim2.new(1,0,1,0); filterScroll.CanvasSize=UDim2.new(0,0,0,350); filterScroll.BackgroundTransparency=1; filterScroll.Parent=filterContent
+    local fiList = Instance.new("UIListLayout"); fiList.Padding = UDim.new(0, 5); fiList.Parent = filterScroll
+    local filterHeader = Instance.new("TextLabel"); filterHeader.Size=UDim2.new(1,-10,0,25); filterHeader.Text="Filter Target Kelangkaan"; filterHeader.Font=Enum.Font.SourceSansBold; filterHeader.Parent=filterScroll
+    local filterRarities = {"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical", "Eternal"};
+    local filterStateNames = {"filterCommon", "filterUncommon", "filterRare", "filterEpic", "filterLegendary", "filterMythical", "filterEternal"}
+    for i, r in ipairs(filterRarities) do createToggle("Target "..r, filterScroll, filterStateNames[i]) end
+end
+
+-- ===================================================================
+-- LOGIKA INTI GAME
+-- ===================================================================
+local function getFishData(fishName) local n=tonumber(string.match(fishName,"Fish(%d+)"))or 0;if n>0 then if n>=12 then return{rarity="Mythical"}elseif n>=11 then return{rarity="Legendary"}elseif n>=9 then return{rarity="Epic"}elseif n>=7 then return{rarity="Rare"}elseif n>=3 then return{rarity="Uncommon"}else return{rarity="Common"}end end;return nil end
+local function getActiveEternal() if not filterEternal then return nil end; local f=workspace:FindFirstChild("FishModelList");if not f then return nil end;for _,m in ipairs(f:GetChildren())do if m:IsA("Model")and ETERNAL_NAMES[m.Name]then local h=m:FindFirstChildOfClass("Humanoid");if h and h.Health>0 then return m,"Eternal"end end end end
+local function getRegularFish() local f=workspace:FindFirstChild("FishModelList");if not f then return nil end;local p=getRoot().Position;local a={};for _,m in ipairs(f:GetChildren())do if m:IsA("Model")and not ETERNAL_NAMES[m.Name]then local d=getFishData(m.Name);if d and _G["filter"..d.rarity]then local h=m:FindFirstChildOfClass("Humanoid");if h and h.Health>0 then local t=(m:GetModelCFrame().p-p).Magnitude;if t<200 then table.insert(a,{model=m,rarity=d.rarity,distance=t})end end end end end;if #a==0 then return nil end;table.sort(a,function(x,y)return x.distance<y.distance end);return a[1].model,a[1].rarity end
+local function startFlying() if flying then return end;flying=true;local c=getCharacter();local h=c:FindFirstChildOfClass("Humanoid");local r=getRoot();for _,o in pairs(r:GetChildren())do if o:IsA("BodyMover")then o:Destroy()end end;local v=Instance.new("BodyVelocity",r);v.MaxForce=Vector3.new(math.huge,math.huge,math.huge);v.Velocity=Vector3.new(0,0,0);local g=Instance.new("BodyGyro",r);g.MaxTorque=Vector3.new(0,math.huge,0);if h then h.PlatformStand=true end end
+local function stopFlying() if not flying then return end;flying=false;local c=getCharacter();local h=c:FindFirstChildOfClass("Humanoid");local r=getRoot();if r then for _,o in pairs(r:GetChildren())do if o:IsA("BodyMover")then o:Destroy()end end end;if h then h.PlatformStand=false end end
+local function focusCameraOn(pos) if not autoFocus then return end;camera.CameraType=Enum.CameraType.Scriptable;camera.CFrame=CFrame.lookAt(camera.CFrame.Position,pos)end
+local function releaseCamera() camera.CameraType = Enum.CameraType.Custom end
+local function teleportToSpot(i) if not autoTeleport or(tick()-lastTpTime<TP_COOLDOWN)then return end;local s=spots[i];if not s then return end;getRoot().CFrame=CFrame.new(s.pos);currentSpotIndex=i;lastTpTime=tick();if autoFly then startFlying()end end
+local function getNearestSpot(pos) local bi,bd=1,math.huge;for i,s in ipairs(spots)do local d=(s.pos-pos).Magnitude;if d<bd then bd=d;bi=i end end;return bi end
+
+-- INISIALISASI & LOOP UTAMA
+pcall(buildUI)
+print("Script (Perbaikan Final Drag & Minimize) Telah Dimuat.")
+
+task.spawn(function()
+    while true do
+        task.wait(2)
+        if autoCollectAquarium then
+            pcall(function() game:GetService("ReplicatedStorage").Aquarium.Remote.ApplySettlementAquariumIncome:InvokeServer() end)
+        end
+    end
+end)
+
+RunService.Heartbeat:Connect(function()
+    if not(screenGui and screenGui.Parent)then return end
+    local targetModel,targetRarity=getActiveEternal()
+    if not targetModel then targetModel,targetRarity=getRegularFish()end
+    if targetModel and targetModel.PrimaryPart then
+        local targetPos=targetModel.PrimaryPart.Position
+        if infoLabel then infoLabel.Text="Nama Ikan: "..targetModel.Name end
+        if distLabel then distLabel.Text=string.format("Jarak: %.1f",(targetPos-getRoot().Position).Magnitude)end
+        if posLabel then posLabel.Text=string.format("Posisi Lock: %d,%d,%d",targetPos.X,targetPos.Y,targetPos.Z)end
+        if jenisLabel then jenisLabel.Text="Jenis Ikan Lock: "..(targetRarity or "N/A")end
+        focusCameraOn(targetPos)
+        local nearestIndex=getNearestSpot(targetPos)
+        if anchorLabel then anchorLabel.Text="Spot Terdekat: "..spots[nearestIndex].name end
+        if currentSpotIndex~=nearestIndex then teleportToSpot(nearestIndex)end
+    else
+        releaseCamera()
+        if infoLabel then infoLabel.Text="Nama Ikan: Mencari..."end
+        if distLabel then distLabel.Text="Jarak: -"end
+        if anchorLabel then anchorLabel.Text="Spot Terdekat: -"end
+        if posLabel then posLabel.Text="Posisi Lock: -"end
+        if jenisLabel then jenisLabel.Text="Jenis Ikan Lock: -"end
+    end
+end)
